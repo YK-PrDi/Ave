@@ -1,0 +1,28 @@
+# 语音识别模型（1.9G，从 HuggingFace 下载，不进版本库）
+# 获取方式见 README.md
+models/
+
+# 中间产物
+.work/
+.probe/
+.cache/
+
+# BGM 素材（运营提供，有版权，不进版本库）
+bgm/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store

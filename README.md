@@ -1,0 +1,102 @@
+# Ave · 分镜自动化混剪工具
+
+把分镜素材按排列组合混剪成多条竖版短视频，自动加字幕、配音、BGM，
+导出到桌面 `VEDIO抖音` 文件夹。
+
+后续接入「羽刃」项目作为一个新功能模式；前端计划用 Vue3。
+
+## 快速开始
+
+```bash
+pip install faster-whisper pillow
+
+# 下载语音识别模型（约 1.5G，见下方「模型」一节）
+
+python -m ave.pipeline --dry-run          # 只看组合方案，不渲染
+python -m ave.pipeline --limit 2 --seed 7 # 跑 2 条验证
+python -m ave.pipeline                    # 全量
+```
+
+## 工作流程
+
+```
+扫描分镜 → 排列组合 → 语音识别 → TTS 配音 → 渲染 → 导出桌面
+```
+
+1. **扫描**：按文件名解析角色（钩子 / 卖点 / 结尾促单）
+2. **组合**：每条 = 1 钩子 + N 个卖点（默认 5）+ 1 结尾，
+   每个钩子用满 3 次即换下一个
+3. **识别**：faster-whisper 识别口播，结果按源片段缓存（55 个片段只识别一次）
+4. **配音**：TTS 重新生成，并调语速贴合画面时长
+5. **渲染**：ffmpeg 拼接 + 字幕 PNG 叠加 + BGM 混音
+6. **导出**：落到桌面 `VEDIO抖音`（不存在自动创建）
+
+## 模块
+
+| 文件 | 作用 |
+|---|---|
+| `combo.py` | 分镜解析 + 排列组合抽样 |
+| `ave/config.py` | 配置集中处，凭证填这里 |
+| `ave/asr.py` | 语音识别 + 缓存 + 幻觉闸门 |
+| `ave/subtitle.py` | Pillow 渲染字幕 PNG |
+| `ave/tts.py` | 配音合成 + 时长贴合 |
+| `ave/render.py` | ffmpeg 拼接 / 叠字幕 / 混音 |
+| `ave/pipeline.py` | 主流程 |
+
+## 素材命名规范
+
+```
+钩子-内容概括-N
+卖点M-内容概括-N
+结尾促单-内容概括-N
+```
+
+- `M` = 卖点顺序（脚本里第几个展示的内容）
+- `N` = 变体编号（同一内容生成了多个时用来区分）
+- `内容概括` = 这个分镜讲什么（沥水 / 收纳 / 颜值……）
+
+**内容概括不能省** —— 缺了就无法判断两个文件是「同一素材的变体」
+还是「两个不同素材」，只能按不同素材处理。
+
+## 模型
+
+语音识别模型不进版本库（1.5G）。下载到 `models/fw_medium/`：
+
+```python
+import urllib.request, os
+base = 'https://hf-mirror.com/Systran/faster-whisper-medium/resolve/main/'
+os.makedirs('models/fw_medium', exist_ok=True)
+for f in ['config.json', 'model.bin', 'tokenizer.json', 'vocabulary.txt']:
+    urllib.request.urlretrieve(base + f, f'models/fw_medium/{f}')
+```
+
+`medium` 比 `small` 明显准（专业词：抹布 / 悬空 / 镂空篮 / 高低杆），
+代价是 1.5G vs 484M。嫌大可换 `Systran/faster-whisper-small` 并改
+`config.MODEL_DIR`。
+
+## 配置
+
+改 `ave/config.py`：
+
+| 项 | 说明 |
+|---|---|
+| `SOURCE_DIR` | 分镜素材根目录 |
+| `POINT_COUNT` | 每条用几个卖点（默认 5）|
+| `HOOK_USE_LIMIT` | 每个钩子用几次（默认 3）—— **决定产量** |
+| `SUBTITLE_SIZE` | 字号刻度（需求要求 10-15）|
+| `TTS_BACKEND` | `stub`（静音占位）/ `volcano`（火山引擎）|
+| `BGM_DIR` | BGM 目录，随机挑一首 |
+
+**产量 = 钩子数 × `HOOK_USE_LIMIT`**。当前素材 13 个钩子 → 39 条。
+
+## 待补资源
+
+见 `docs/资源需求清单.md`：
+
+1. 火山引擎语音合成凭证 + 音色 ID —— 没有它配音是静音
+2. 轻快 BGM 文件夹 —— 没有它成品无背景音乐
+
+## 设计与踩坑记录
+
+见 `docs/ARCHITECTURE.md`。包含已验证的环境事实、ffmpeg 能力边界、
+ASR 幻觉闸门、以及一批实测踩过的坑。
