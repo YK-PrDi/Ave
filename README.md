@@ -7,14 +7,31 @@
 
 ## 快速开始
 
-```bash
-pip install faster-whisper pillow
+**双击 `启动.bat`** —— 自动装依赖、下模型、起服务、开浏览器。
+首次运行要装依赖和下模型（约 5-10 分钟），之后每次几秒就好。
+用完双击 `停止.bat`。
 
-# 下载语音识别模型（约 1.5G，见下方「模型」一节）
+需要预装 [Python 3.10+](https://www.python.org/downloads/)（装时勾选
+"Add Python to PATH"）和 [Node.js LTS](https://nodejs.org/)。
+
+### 命令行方式
+
+不想用界面就直接跑：
+
+```bash
+pip install -r requirements.txt
+python 下载模型.py                        # 下载语音识别模型
 
 python -m ave.pipeline --dry-run          # 只看组合方案，不渲染
 python -m ave.pipeline --limit 2 --seed 7 # 跑 2 条验证
 python -m ave.pipeline                    # 全量
+```
+
+### 界面单独启动
+
+```bash
+python -m ave.server                      # 后端，8756
+cd frontend && npm run dev                # 界面，5173
 ```
 
 ## 工作流程
@@ -41,7 +58,39 @@ python -m ave.pipeline                    # 全量
 | `ave/subtitle.py` | Pillow 渲染字幕 PNG |
 | `ave/tts.py` | 配音合成 + 时长贴合 |
 | `ave/render.py` | ffmpeg 拼接 / 叠字幕 / 混音 |
-| `ave/pipeline.py` | 主流程 |
+| `ave/pipeline.py` | 主流程，命令行与 HTTP 共用 |
+| `ave/server.py` | FastAPI 本地服务（127.0.0.1:8756）|
+| `frontend/` | Vue3 + TypeScript 界面 |
+| `启动.bat` / `停止.bat` | 一键起停（GBK 编码，见下方注意）|
+| `下载模型.py` | 下载语音识别模型，走国内镜像、支持续传 |
+
+### 给 Java 项目调用
+
+后端是 HTTP 接口，Java 侧不用碰 Python：
+
+| 接口 | 作用 |
+|---|---|
+| `GET /api/health` | 环境自检 |
+| `POST /api/scan` | 扫素材，返回盘点与预计产量 |
+| `POST /api/preview` | 预览组合方案 |
+| `POST /api/jobs` | 提交渲染任务，返回 job_id |
+| `GET /api/jobs/{id}/events` | SSE 实时进度 |
+| `POST /api/jobs/{id}/stop` | 停止任务 |
+
+用 `java.net.http.HttpClient` 调即可，SSE 用 `ofLines()` 逐行读。
+
+### 注意：批处理必须存 GBK
+
+`启动.bat` / `停止.bat` 存的是 **GBK**，不是 UTF-8。
+中文 Windows 的 cmd 按系统默认编码读批处理文件，
+存成 UTF-8 会导致中文乱码、`if`/`goto` 流程被打断（实测踩过）。
+改这两个文件后要转回 GBK：
+
+```python
+import io
+s = io.open('启动.bat', encoding='utf-8').read()
+io.open('启动.bat', 'w', encoding='gbk', newline='\r\n').write(s)
+```
 
 ## 素材命名规范
 
