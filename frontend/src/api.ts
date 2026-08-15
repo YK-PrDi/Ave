@@ -71,6 +71,12 @@ export interface OutputFile {
   mtime: number
 }
 
+// 成品文件名形如 混剪_007.mp4，尾号即组合序号，用来关联组合明细
+export function comboIndexOf(name: string): number | null {
+  const m = name.match(/(\d+)\.mp4$/i)
+  return m ? parseInt(m[1], 10) : null
+}
+
 const BASE = '/api'
 
 async function post<T>(path: string, body: unknown = {}): Promise<T> {
@@ -100,7 +106,21 @@ export const api = {
   preview: (p: JobParams) => post<Preview>('/preview', p),
   createJob: (p: JobParams) => post<{ id: string }>('/jobs', p),
   stopJob: (id: string) => post<{ ok: boolean }>(`/jobs/${id}/stop`),
-  outputs: () => get<{ dir: string; files: OutputFile[] }>('/outputs'),
+  outputs: (outDir?: string) =>
+    get<{ dir: string; files: OutputFile[] }>(
+      '/outputs' + (outDir ? `?out_dir=${encodeURIComponent(outDir)}` : ''),
+    ),
+
+  // <video src> 直接指这个地址，后端支持 Range 所以能拖进度条
+  videoUrl: (name: string, outDir?: string) =>
+    `${BASE}/video?name=${encodeURIComponent(name)}` +
+    (outDir ? `&out_dir=${encodeURIComponent(outDir)}` : ''),
+
+  deleteOutput: (name: string, outDir?: string) =>
+    post<{ ok: boolean }>(
+      `/outputs/delete?name=${encodeURIComponent(name)}` +
+        (outDir ? `&out_dir=${encodeURIComponent(outDir)}` : ''),
+    ),
   openOutput: (outDir?: string) =>
     post<{ ok: boolean }>(
       '/open-output' + (outDir ? `?out_dir=${encodeURIComponent(outDir)}` : ''),

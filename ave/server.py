@@ -25,7 +25,7 @@ import uuid
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ave import config, pipeline
@@ -254,6 +254,43 @@ def outputs(out_dir: str | None = None):
         files.append({"name": f, "size_mb": round(st.st_size / 1e6, 1),
                       "mtime": int(st.st_mtime)})
     return {"dir": d, "files": files}
+
+
+def _safe_output_file(name: str, out_dir: str | None):
+    """把前端给的文件名解析成输出目录下的真实路径。
+
+    只允许输出目录直属的 .mp4，挡掉 ../ 穿越和绝对路径 ——
+    这服务虽然只听 127.0.0.1，但浏览器里任何页面都能发请求到本机端口，
+    不能让它读到磁盘上任意文件。
+    """
+    d = os.path.realpath(out_dir or config.OUTPUT_DIR)
+    if not name.lower().endswith(".mp4"):
+        raise HTTPException(400, "只支持 mp4")
+    # basename 掉掉所有路径成分，再 realpath 兜住软链接
+    p = os.path.realpath(os.path.join(d, os.path.basename(name)))
+    if os.path.dirname(p) != d:
+        raise HTTPException(400, "非法路径")
+    if not os.path.isfile(p):
+        raise HTTPException(404, "文件不存在")
+    return p
+
+
+@app.get("/api/video")
+def video(name: str, out_dir: str | None = None):
+    """回放成品。Starlette 的 FileResponse 原生处理 Range 并返回 206，
+    所以 <video> 拖进度条能直接 seek，不用自己切分片【实测源码确认】。
+    """
+    p = _safe_output_file(name, out_dir)
+    return FileResponse(p, media_type="video/mp4",
+                        content_disposition_type="inline")
+
+
+@app.post("/api/outputs/delete")
+def delete_output(name: str, out_dir: str | None = None):
+    """删掉一条成品。组合质量不合意时在界面上直接清掉。"""
+    p = _safe_output_file(name, out_dir)
+    os.remove(p)
+    return {"ok": True, "name": os.path.basename(p)}
 
 
 @app.post("/api/open-output")

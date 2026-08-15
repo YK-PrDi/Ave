@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { api } from './api'
-import type { ComboItem, Health, JobEvent, ScanStats } from './api'
+import type { ComboItem, Health, JobEvent, OutputFile, ScanStats } from './api'
 import HealthBar from './components/HealthBar.vue'
 import SourcePanel from './components/SourcePanel.vue'
 import ParamPanel from './components/ParamPanel.vue'
 import PreviewList from './components/PreviewList.vue'
 import RunPanel from './components/RunPanel.vue'
+import OutputList from './components/OutputList.vue'
 
 const health = ref<Health | null>(null)
 const source = ref('')
@@ -29,6 +30,23 @@ const jobId = ref('')
 const outDir = ref('')
 const picking = ref(false)
 let unsubscribe: (() => void) | null = null
+
+const outputs = ref<OutputFile[]>([])
+const outputsDir = ref('')
+const loadingOutputs = ref(false)
+
+async function loadOutputs() {
+  loadingOutputs.value = true
+  try {
+    const r = await api.outputs(outDir.value || undefined)
+    outputs.value = r.files
+    outputsDir.value = r.dir
+  } catch (e) {
+    error.value = String(e instanceof Error ? e.message : e)
+  } finally {
+    loadingOutputs.value = false
+  }
+}
 
 function params() {
   return {
@@ -55,6 +73,7 @@ async function pick(target: 'source' | 'out') {
       await doScan()
     } else {
       outDir.value = path
+      await loadOutputs()
     }
   } catch (e) {
     error.value = String(e instanceof Error ? e.message : e)
@@ -73,6 +92,7 @@ onMounted(async () => {
     hookLimit.value = h.defaults.hook_limit
     subSize.value = h.defaults.sub_size
     await doScan()
+    await loadOutputs()
   } catch (e) {
     error.value = `连不上后端服务，请先运行 python -m ave.server（${e}）`
   }
@@ -119,12 +139,16 @@ async function start() {
       (ev) => {
         if (ev.type === 'error') error.value = ev.error ?? '渲染出错'
         events.value = [...events.value, ev]
+        // 每渲完一条就刷成品列表，边跑边能点开看质量。
+        // 只是一次本地 listdir，代价可忽略。
+        if (ev.type === 'item' && ev.ok) loadOutputs()
       },
       async () => {
         running.value = false
         unsubscribe = null
         // 跑完刷新环境状态（BGM 可能中途放进去了）
         health.value = await api.health().catch(() => health.value)
+        await loadOutputs()
       },
     )
   } catch (e) {
@@ -194,6 +218,16 @@ onUnmounted(() => unsubscribe?.())
       @stop="stop"
       @open="open"
       @pick="pick('out')"
+    />
+
+    <OutputList
+      :files="outputs"
+      :dir="outputsDir"
+      :loading="loadingOutputs"
+      :combos="combos"
+      :out-dir="outDir"
+      @refresh="loadOutputs"
+      @deleted="loadOutputs"
     />
   </div>
 </template>
