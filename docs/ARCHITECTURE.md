@@ -57,6 +57,46 @@
 **结论**：要烧字幕就得自带完整 ffmpeg 构建，或走 Pillow 渲 PNG + `overlay` 叠加。
 已验证 Pillow 能加载新青年体（内部名 `WenYue XinQingNianTi (Non-Commercial Use)`）。
 
+### 换完整 ffmpeg 构建后，上面的约束已解除【2026-08-15 实测】
+
+打包 exe 要脱离剪映，所以改用完整构建：
+`C:\Users\20739\Downloads\ffmpeg-2026-02-11-git-2ab674247e-full_build\bin\ffmpeg.exe`
+
+| 项 | 剪映自带 | 完整构建 |
+|---|---|---|
+| 体积 | 0.5MB | 87.5MB |
+| 链接方式 | **动态**，依赖同目录 `avcodec-61.dll` 等 7 个 `av*`/`sw*` DLL | **静态，零 DLL 依赖** |
+| 能否单独分发 | ❌ 只拷 exe 得到废文件 | ✅ 单文件即可 |
+| `drawtext` | ❌ | ✅ 实跑编码通过 |
+| `libx264` | ❌ | ✅ 实跑编码通过 |
+| `ffprobe` | ❌ `--disable-ffprobe` | ✅ 独立 `ffprobe.exe` |
+
+**但字幕方案仍保持 Pillow 渲 PNG + overlay**，不改用 `drawtext`：
+现方案已端到端验证，`subtitle.py` 处理好了中文折行与孤立标点合并，
+换过去要重做转义和字体加载，无收益。（见 `CLAUDE.md` 铁律 3。）
+
+**`libx264` 的真实价值是软编码兜底**：`render.py` 原先只试四个硬编码器、全不可用就报错，
+无独显的办公机会当场跑不了。带完整构建后应在候选末尾加 `libx264`。
+
+### 打包相关实测数据【2026-08-15】
+
+| 项 | 值 |
+|---|---|
+| PyInstaller | 6.19.0 已装 |
+| ctranslate2 | 63MB，其中 `ctranslate2.dll` 51.6MB。PyInstaller 老大难，需显式 collect |
+| faster_whisper 资产 | VAD 模型约 18MB，**必须打进包**，否则幻觉闸门失效 |
+| 分发包预估 | 200-250MB（不含 1.5G 模型） |
+| 分发形态 | **onedir 不用 onefile** —— onefile 每次启动要解压约 150MB 到 temp，慢且原生 DLL 易出问题 |
+
+### 播放接口：Starlette 原生支持 Range【2026-08-15 读源码确认】
+
+`FileResponse` 会解析 `Range` 头、返回 `206` 和 `Content-Range`（`starlette/responses.py`
+有 `_parse_range_header` / `_handle_single_range`），所以 `<video>` 拖进度条能直接 seek，
+**不用自己切分片**。实测 `Content-Range: bytes 0-1023/26906059`。
+
+安全边界：服务只听 127.0.0.1，但**浏览器里任何网页都能往本机端口发请求**，
+所以 `_safe_output_file()` 用 `basename` + `realpath` 把路径限死在输出目录内、只放 `.mp4`。
+
 ### 素材盘点【实测】`D:\Download\分镜\1~7`
 
 - 钩子 13 / 卖点 34 / 结尾促单 8，共 55 个片段
@@ -178,6 +218,16 @@ python -m ave.pipeline                    # 全量
   单片段 CPU 4s vs 1.6s）
 - **白字必须描边**。厨房台面是浅色，纯白字+弱阴影会发虚
 - **孤立标点会单独成行**（句末「。」掉到第二行），折行后要合并回上一行
+- **`Windows GBK` 编不了 `⚠ ✓ ✗`**。CLI print 这些字符、输出重定向到文件时
+  直接 `UnicodeEncodeError` 崩，全量跑不完。入口处 reconfigure stdout/stderr 为 UTF-8
+  + `errors='replace'` 兜底【2026-08-15 踩过】
+- **不传 seed 的组合预览无法和已渲成品对应**，且会**伪装成正确的**。
+  `build_combos` 按 `hook_groups` 顺序遍历、每组用满 `hook_limit` 次，顺序是确定的；
+  多数钩子组只有一个变体，`rng.choice` 每次返回同一片段 —— 所以**钩子永远看着对，
+  只有卖点和结尾在漂**。实测同一请求 5 次出 4 个不同结尾。
+  要把成品和组合对应上，必须在渲染时落 manifest，不能靠序号事后join【2026-08-15 踩过】
+- **stdout 重定向到文件是块缓冲**，进度日志不会实时出现（`wc -c` 长时间为 0）。
+  想看进度改数输出文件数，或加 `flush=True`
 
 ### ASR 幻觉闸门【实测】
 
