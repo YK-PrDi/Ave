@@ -194,6 +194,13 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
 
 
 def main():
+    # Windows 控制台/管道默认 GBK，编不了 ⚠ ✓ ✗ 这些字符，
+    # 输出重定向到文件时会直接 UnicodeEncodeError 崩掉【实测】。
+    # errors='replace' 兜底：字体缺字最多显示成 ?，不会中断渲染。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     ap = argparse.ArgumentParser(description="分镜自动化混剪")
     ap.add_argument("--source", default=config.SOURCE_DIR, help="分镜根目录")
     ap.add_argument("--points", type=int, default=config.POINT_COUNT,
