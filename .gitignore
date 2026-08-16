@@ -11,11 +11,21 @@ models/
 bgm/
 
 # 随包分发的二进制素材，体积大且各有授权，不进版本库。
-# 获取方式见 docs/进度与待办.md 落地 4。
-# ffmpeg.exe  GPL full build（含 libx264），约 87MB
-# fonts/      新青年体（⚠ 标注 Non-Commercial）+ 思源黑体 SC Bold（SIL OFL）
+# **换机器后跑 `python 准备素材.py` 自动补齐**（--check 只检查不下载）。
+# 不进 git 的原因有两条：一是 144MB 二进制每改一次 git 存一份全量，
+# 仓库很快膨胀到 GB 级；二是 GPL 二进制和非商用字体进版本库，
+# 等于版本库本身在分发它们，授权面更麻烦。
+#   ffmpeg.exe  GPL full build（含 libx264），144MB
+#   fonts/      思源黑体 SC Bold（SIL OFL，默认）+ 新青年体（⚠ 非商用）
+# ⚠ 注意这只影响「重新打包」。给最终用户的 exe 分发包里两者都已打进去
+#   （见 Ave.spec 的 datas），用户不需要准备任何东西。
+# 许可声明目录 licenses/ **要进版本库** —— 它是源码的一部分，不是素材。
 ffmpeg.exe
-fonts/
+# ⚠ 必须写 `/fonts/` 带前导斜杠 —— 只锚定项目根。
+# 写成 `fonts/` 会匹配任意层级，把 `licenses/fonts/` 里的字体许可文件
+# 一起排掉【实测：SIL-OFL / 普惠体 / 新青年体三份授权说明全被静默忽略】。
+# 那等于分发时漏掉必须随包的字体许可，比漏字体本身更严重。
+/fonts/
 
 # 打包产物
 build/
@@ -41,3 +51,4 @@ venv/
 Thumbs.db
 desktop.ini
 .DS_Store
+.gstack/

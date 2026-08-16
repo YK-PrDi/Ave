@@ -138,6 +138,43 @@ def prune_manifest(out_dir, filename):
     os.replace(tmp, p)
 
 
+def warm_point_asr(pools, recognizer, work, on_event=None, should_stop=None):
+    """先识别每个卖点变体组的代表片段，让语义聚类能读到 ASR 原文。
+
+    为什么需要：`build_theme_map()` 跑在 `run()` 开头，**早于任何识别**，
+    而 `point_texts()` 只读缓存。全新安装的 exe 用户目录里没缓存，
+    33 组就全部回落用文件名标签 —— 标签聚出 14 簇、原文聚出 10 簇，
+    去重强度不同，首批成品质量弱一档【实测：exe 首跑就是这样】。
+
+    **不增加识别总量**：这些片段本来在渲染时也要识别一遍，
+    这里只是把时间点提前。缓存命中直接返回（见 `asr.Recognizer.recognize`）。
+
+    返回 (已识别数, 出声的组数)。
+    """
+    groups = combo.group_variants(pools.points)
+    reps = [g[0] for g in groups]
+    total = len(reps)
+    done = voiced = 0
+    for i, c in enumerate(reps, 1):
+        if should_stop and should_stop():
+            break
+        try:
+            res = recognizer.recognize(c.path, work)
+            if res.get("segments"):
+                voiced += 1
+            done += 1
+        except (RuntimeError, OSError) as e:
+            # 单个片段识别失败不该拖垮整批 —— 聚类会回落用它的标签
+            if on_event:
+                on_event({"type": "prewarm", "done": i, "total": total,
+                          "file": c.name, "error": str(e)[:200]})
+            continue
+        if on_event:
+            on_event({"type": "prewarm", "done": i, "total": total,
+                      "file": c.name})
+    return done, voiced
+
+
 def point_texts(pools):
     """每个卖点变体组的代表文本，用于语义聚类。
 
@@ -246,7 +283,33 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
             on_event(ev)
 
     pools, stats = scan(source)
+
+    # recognizer 提到聚类之前 —— 聚类要读 ASR 原文，得先有原文。
+    # 构造本身不加载模型（`Recognizer.model` 是懒加载的 property），
+    # 所以不预热时这行的代价仍然接近零。
+    recognizer = asr.Recognizer(config.MODEL_DIR, config.FFMPEG,
+                                config.ASR_CACHE)
+    os.makedirs(config.WORK_DIR, exist_ok=True)
+
+    # 预热只在「全量 + 开去重」时做。
+    # 限量跑不预热：`--limit 2` 现在几秒出片，冷缓存下预热 33 个片段要两分钟，
+    # 会毁掉这条快速验证路径（CLAUDE.md 要求改 Python 必须跑 --limit 2）。
+    warm_note = ""
+    if dedup and not limit:
+        n, voiced = warm_point_asr(pools, recognizer, config.WORK_DIR,
+                                   on_event=on_event,
+                                   should_stop=should_stop)
+        warm_note = f"；已预热 {n} 个卖点代表片段（{voiced} 个有口播）"
+        # 预热要两分钟，中途停止得当场收手，不能接着渲一整批
+        if should_stop and should_stop():
+            emit(type="stopped", done=0, total=0)
+            return {"ok": 0, "total": 0, "failed": [], "notes": [],
+                    "seconds": 0.0, "out_dir": out_dir or config.OUTPUT_DIR}
+    elif dedup and limit:
+        warm_note = "；限量跑跳过 ASR 预热，聚类可能回落用文件名标签"
+
     theme_map, theme_note = build_theme_map(pools, dedup)
+    theme_note += warm_note
     combos = combo.build_combos(
         pools,
         point_count=points if points is not None else config.POINT_COUNT,
@@ -262,11 +325,8 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
          backend=config.TTS_BACKEND, out_dir=out_dir, stats=stats,
          dedup=dedup, theme_note=theme_note)
 
-    recognizer = asr.Recognizer(config.MODEL_DIR, config.FFMPEG,
-                                config.ASR_CACHE)
     backend = make_tts_backend()
     rng = random.Random(seed)
-    os.makedirs(config.WORK_DIR, exist_ok=True)
 
     ok, failed, all_notes = 0, [], []
     t0 = time.time()

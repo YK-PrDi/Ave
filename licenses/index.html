@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Ave · 开源许可与第三方声明</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    max-width: 52rem; margin: 0 auto; padding: 2rem 1.25rem 4rem;
+    font: 15px/1.7 system-ui, "Microsoft YaHei", sans-serif;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #8884;
+       padding-bottom: .3rem; }
+  .lede { color: #7a7a7a; margin-top: 0; }
+  table { border-collapse: collapse; width: 100%; margin: .75rem 0; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #8883;
+           vertical-align: top; }
+  th { font-weight: 600; white-space: nowrap; }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: .88em;
+         background: #8881; padding: .1em .35em; border-radius: 3px; }
+  .warn { background: #f9731618; border-left: 3px solid #f97316;
+          padding: .7rem .9rem; margin: 1rem 0; border-radius: 0 4px 4px 0; }
+  ol { padding-left: 1.4rem; }
+  a { color: #2563eb; }
+  @media (prefers-color-scheme: dark) { a { color: #7aa7ff; } }
+  footer { margin-top: 2.5rem; color: #7a7a7a; font-size: .9em; }
+</style>
+</head>
+<body>
+
+<h1>开源许可与第三方声明</h1>
+<p class="lede">Ave 分镜自动化混剪工具</p>
+
+<p>Ave 随包分发了若干第三方组件，下面汇总它们的许可条款与源码获取方式。</p>
+
+<div class="warn">
+  <strong>摘要</strong>：随包的 <code>ffmpeg.exe</code> 是 <strong>GPLv3</strong> 构建，
+  另有两个 <strong>GPLv2</strong> 的编码器 DLL（<code>libx264</code> /
+  <code>libx265</code>，随 PyAV 而来、实测无法移除）。对外分发这些二进制时，
+  须同时提供本目录内容并履行源码提供义务 ——
+  见 <a href="ffmpeg/SOURCE-OFFER.md">源码获取说明</a>。
+  其余依赖均为宽松许可。
+</div>
+
+<h2>组件清单</h2>
+<table>
+  <tr><th>组件</th><th>许可</th><th>文件</th></tr>
+  <tr>
+    <td><strong>ffmpeg</strong></td>
+    <td>GPL v3 or later</td>
+    <td>
+      <a href="ffmpeg/COPYING.GPLv3">COPYING.GPLv3</a> ·
+      <a href="ffmpeg/BUILD-INFO.txt">BUILD-INFO.txt</a>（版本 / SHA256 / configure 全文）·
+      <a href="ffmpeg/SOURCE-OFFER.md"><strong>SOURCE-OFFER.md</strong></a> ·
+      <a href="ffmpeg/checksums.sha256">checksums.sha256</a>
+    </td>
+  </tr>
+  <tr>
+    <td><strong>x264</strong></td>
+    <td>GPL v2 or later</td>
+    <td><a href="x264/COPYING">x264/COPYING</a></td>
+  </tr>
+  <tr>
+    <td><strong>x265</strong></td>
+    <td>GPL v2 or later</td>
+    <td><a href="x265/COPYING">x265/COPYING</a></td>
+  </tr>
+  <tr>
+    <td>FFmpeg 共享库<br>（PyAV 自带）</td>
+    <td>LGPL v3 or later（自报）</td>
+    <td><a href="ffmpeg/COPYING.LGPLv3">COPYING.LGPLv3</a></td>
+  </tr>
+  <tr>
+    <td><strong>阿里巴巴普惠体 3.0</strong><br>（默认字幕字体）</td>
+    <td>免费商用，无需授权</td>
+    <td><a href="fonts/阿里巴巴普惠体-授权说明.md">阿里巴巴普惠体-授权说明.md</a></td>
+  </tr>
+  <tr>
+    <td><strong>思源黑体 SC Bold</strong><br>（普惠体缺失时的回落）</td>
+    <td>SIL OFL 1.1</td>
+    <td><a href="fonts/SIL-OFL-1.1.txt">SIL-OFL-1.1.txt</a></td>
+  </tr>
+  <tr>
+    <td><strong>新青年体</strong></td>
+    <td>⚠️ <strong>仅非商用</strong></td>
+    <td><a href="fonts/新青年体-授权说明.md">新青年体-授权说明.md</a></td>
+  </tr>
+  <tr>
+    <td>Python 依赖（约 40 项）</td>
+    <td>MIT / BSD / Apache / MPL 等</td>
+    <td><a href="third-party/PYTHON-DEPS.md">PYTHON-DEPS.md</a></td>
+  </tr>
+</table>
+
+<h2>对外分发前必做</h2>
+<ol>
+  <li>读 <a href="ffmpeg/SOURCE-OFFER.md">SOURCE-OFFER.md</a>，把里面的
+      <code>&lt;待填&gt;</code> 全部补上（源码归档 URL、SHA256、联系方式）。
+      <strong>没补完等于没履行义务</strong></li>
+  <li>确认 <code>licenses/</code> 整个目录随分发包一起交付</li>
+  <li>确认字幕字体的选择符合使用场景 ——
+      见 <a href="fonts/新青年体-授权说明.md">新青年体授权说明</a></li>
+</ol>
+<p><code>python 准备素材.py --check</code> 会检查第 1 条的占位符是否还在。</p>
+
+<h2>关于 Ave 自身</h2>
+<p>
+  Ave 通过 <code>subprocess</code> 调用独立的 <code>ffmpeg.exe</code> 进程完成转码，
+  不静态链接 GPL 代码。但 PyAV 的 GPL 编码器 DLL 会加载进 Ave 进程 ——
+  这两者在传染性上的处境不同，机制与实测证据见
+  <a href="ffmpeg/SOURCE-OFFER.md">SOURCE-OFFER.md</a> 第三节。
+</p>
+
+<footer>本页只陈述事实，不构成法律意见。</footer>
+
+</body>
+</html>

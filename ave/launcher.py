@@ -80,7 +80,10 @@ def ensure_model():
     （用户 2026-08-15 决定）。
     """
     from ave import config
-    if os.path.isdir(config.MODEL_DIR) and os.listdir(config.MODEL_DIR):
+    # 判据是 model.bin 在不在，不是「目录非空」【实测踩过】：
+    # 下载中断会留下有 config.json / tokenizer.json 但没 model.bin 的
+    # 半截目录，按「非空」算就跳过下载，之后加载才报 model.bin 打不开。
+    if os.path.isfile(os.path.join(config.MODEL_DIR, "model.bin")):
         return config.MODEL_DIR
 
     target = os.path.join(config._USER_DIR, "models", config.MODEL_NAME)

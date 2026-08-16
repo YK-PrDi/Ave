@@ -50,6 +50,20 @@ def _first_existing(candidates, default):
             return p
     return default
 
+
+def _first_usable_model(candidates, default):
+    """返回第一个**真能用**的模型目录，判据是 `model.bin` 在不在。
+
+    ⚠ 不能只判目录存在【实测踩过】：下载中断会留下一个有 config.json、
+    tokenizer.json 却没有 model.bin 的半截目录。那种目录按「存在」算，
+    会**遮挡**后面那个完整的模型，加载时才报
+    `Unable to open file 'model.bin'` —— 而且此时聚类已经静默回落用标签了。
+    """
+    for p in candidates:
+        if os.path.isfile(os.path.join(p, "model.bin")):
+            return p
+    return default
+
 # 分镜素材根目录（产品大文件夹，下面是小分镜文件夹）
 SOURCE_DIR = r"D:\Download\分镜"
 
@@ -97,28 +111,60 @@ def find_ffmpeg():
 
 FFMPEG = find_ffmpeg()
 
-# 字幕字体。切这个开关换字体，两种都随包带。
-#   新青年体   ⚠️ 内部名标注 Non-Commercial Use，商用授权风险已知
-#              （用户 2026-08-14 决定先用着）
-#   思源黑体   SIL OFL，可商用，无风险
-SUBTITLE_FONT = "新青年体"
+# 字幕字体。切这个开关换字体，都随包带。
+#   普惠体     阿里巴巴普惠体 3.0，免费商用无需授权 —— **默认**（用户 2026-08-16 定）
+#              Heavy(105) 而不是 Black(115)：115 在 720p 上笔画多的字容易糊成一团，
+#              105 字重够又不糊。要更重就把开关改成 "普惠体Black"。
+#   思源黑体   SIL OFL，可商用，普惠体缺失时的退路
+#   新青年体   ⚠️ 内部名就是 `WenYue XinQingNianTi (Non-Commercial Use)`
+#              【Pillow 实测读出】，带货是商用场景。不做默认。
+#              风险详情见 licenses/fonts/新青年体-授权说明.md
+SUBTITLE_FONT = "普惠体"
 
 FONT_FILES = {
-    "新青年体": "新青年体.ttf",
+    "普惠体": "AlibabaPuHuiTi-3-105-Heavy.ttf",
+    "普惠体Black": "AlibabaPuHuiTi-3-115-Black.ttf",
     "思源黑体": "SourceHanSansSC-Bold.otf",
+    "新青年体": "新青年体.ttf",
 }
 
+# 字体查找失败时的回落顺序。普惠体要手动下（官方站是 JS 应用、OSS 直链 403、
+# GitHub 上全是非官方转载，脚本不敢代下），所以缺它时要能自动退到思源黑体，
+# 不能让字幕直接崩。
+FONT_FALLBACK = ["普惠体", "思源黑体", "新青年体"]
 
-def find_font(name=None):
-    """字体查找顺序：随包的 `fonts/` → 剪映字体目录（开发期兜底）。"""
-    fname = FONT_FILES.get(name or SUBTITLE_FONT, FONT_FILES["新青年体"])
+
+def _font_candidate(fname):
+    """单个字体文件的查找：随包的 `fonts/` → 剪映字体目录（开发期兜底）。"""
     bundled = _resource("fonts", fname)
     if os.path.isfile(bundled):
         return bundled
     jianying = os.path.join(
         os.environ.get("LOCALAPPDATA", ""),
         "JianyingPro", "User Data", "Resources", "Font", fname)
-    return jianying   # 不存在也返回 —— /api/health 会报字体缺失，不在导入期崩
+    return jianying if os.path.isfile(jianying) else None
+
+
+def find_font(name=None):
+    """解析字幕字体路径。先试指定的那个，缺了按 FONT_FALLBACK 往下退。
+
+    ⚠ 要能自动回落：普惠体只能手动下载（官方站是 JS 应用、阿里 OSS 直链
+    403、GitHub 上 18 个仓库全是非官方转载 —— 从随机镜像下字体二进制
+    无法验证是否官方原版，风险和那份 1.44MB 假 OTF 同类）。
+    所以缺它时退到思源黑体继续出片，而不是让字幕整条链崩掉。
+    """
+    want = name or SUBTITLE_FONT
+    order = [want] + [f for f in FONT_FALLBACK if f != want]
+    for key in order:
+        fname = FONT_FILES.get(key)
+        if not fname:
+            continue
+        p = _font_candidate(fname)
+        if p:
+            return p
+    # 全都找不到也要返回路径而不是抛异常 —— 否则 import config 就崩，
+    # /api/health 都开不出来。健康检查会把 font 报成 False。
+    return _resource("fonts", FONT_FILES.get(want, FONT_FILES["思源黑体"]))
 
 
 FONT_PATH = find_font()
@@ -139,7 +185,7 @@ ASR_CACHE = os.path.join(CACHE_DIR, "asr.json")
 # 代价是 1.5G vs 484M，单片段 CPU 约 4s vs 1.6s。
 # 办公机分发时若嫌大可换回 fw_small，牺牲专业词准确度。
 MODEL_NAME = "fw_medium"
-MODEL_DIR = _first_existing(
+MODEL_DIR = _first_usable_model(
     [os.path.join(_USER_DIR, "models", MODEL_NAME),
      os.path.join(_ROOT, "models", MODEL_NAME)],
     os.path.join(_USER_DIR, "models", MODEL_NAME))
@@ -164,11 +210,37 @@ SUBTITLE_SHADOW = True   # 需求要求带阴影
 
 # 后端：'stub' 产出等时长静音（无凭证时验证全流程用）
 #      'volcano' 走火山引擎，需下面三项凭证
-TTS_BACKEND = "stub"
+# 三项凭证填齐后自动切 volcano，不用手动改这行（见下方 _tts_backend()）。
+#
+# ┌─ 凭证怎么填：两种方式，二选一 ─────────────────────────────┐
+# │ A. 环境变量（推荐，不进 git）                              │
+# │      setx AVE_VOLCANO_APPID  "你的appid"                   │
+# │      setx AVE_VOLCANO_TOKEN  "你的token"                   │
+# │      setx AVE_VOLCANO_VOICE  "音色ID"                      │
+# │    setx 之后要**重开终端**才生效。                          │
+# │                                                            │
+# │ B. 直接写下面的字符串（省事，但⚠ 本文件进版本库，          │
+# │    凭证会被 git 记录 —— 别推到公开仓库）                    │
+# └────────────────────────────────────────────────────────────┘
+# Cluster 不用运营去控制台找 —— `volcano_tts` 是标准默认值。
 
-VOLCANO_APPID = ""
-VOLCANO_TOKEN = ""
-VOLCANO_CLUSTER = "volcano_tts"
+VOLCANO_APPID = os.environ.get("AVE_VOLCANO_APPID", "")
+VOLCANO_TOKEN = os.environ.get("AVE_VOLCANO_TOKEN", "")
+VOLCANO_CLUSTER = os.environ.get("AVE_VOLCANO_CLUSTER", "volcano_tts")
 # 音色 ID。「小姐姐」是剪映内部显示名，火山引擎公开音色表里没有同名条目，
 # 需运营在控制台试听后提供最接近的 ID。
-VOLCANO_VOICE = ""
+VOLCANO_VOICE = os.environ.get("AVE_VOLCANO_VOICE", "")
+
+
+def _tts_backend():
+    """三项凭证齐了就用 volcano，缺任一项回落 stub（静音占位）。
+
+    自动判断而不是让人再改一个开关 —— 否则「填了凭证但忘了改 TTS_BACKEND」
+    会静默产出 39 条静音成品，跑完才发现。
+    """
+    if VOLCANO_APPID and VOLCANO_TOKEN and VOLCANO_VOICE:
+        return "volcano"
+    return "stub"
+
+
+TTS_BACKEND = _tts_backend()

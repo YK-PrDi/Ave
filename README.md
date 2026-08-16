@@ -138,6 +138,37 @@ for f in ['config.json', 'model.bin', 'tokenizer.json', 'vocabulary.txt']:
 
 **产量 = 钩子数 × `HOOK_USE_LIMIT`**。当前素材 13 个钩子 → 39 条。
 
+## 换机器怎么准备
+
+`git clone` 下来跑不了打包 —— `ffmpeg.exe`（144MB）和 `fonts/` 不进版本库
+（体积大、各有授权，见 `.gitignore` 里的说明）。一条命令补齐：
+
+```bash
+python 准备素材.py            # 检查并下载缺的（首次约 250MiB，本机实测约 4MB/min）
+python 准备素材.py --check    # 只看缺什么，不下载
+python 准备素材.py --force    # 校验不过时重下
+```
+
+**⚠ 这只影响「重新打包」。** 给最终用户的 exe 分发包里 ffmpeg 和字体
+都已经打进去了（见 `Ave.spec` 的 `datas`），用户不需要准备任何东西。
+
+新青年体只能从装了剪映的机器上拷，脚本下不到 —— 缺了不影响出片，
+默认字幕字体是思源黑体。
+
+## 开源许可
+
+随包的 `ffmpeg.exe` 是 **GPLv3** 构建，另有两个 **GPLv2** 的编码器 DLL
+（`libx264` / `libx265`，随 PyAV 而来，实测无法移除）。
+许可全文、源码获取说明、依赖清单都在 **`licenses/`**，界面页脚也有入口。
+
+**对外分发前必须补齐 `licenses/ffmpeg/SOURCE-OFFER.md` 里的 `<待填>`**
+（源码归档地址）。写文档不等于履行义务，得真有个能下载到东西的地方。
+`python 准备素材.py --check` 会提醒占位符还在。
+
+字幕默认用思源黑体（SIL OFL，可商用）。新青年体内部名带
+`(Non-Commercial Use)`，带货是商用场景 —— 详见
+`licenses/fonts/新青年体-授权说明.md`。
+
 ## 待补资源
 
 见 `docs/资源需求清单.md`：

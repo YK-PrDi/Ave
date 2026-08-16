@@ -38,11 +38,24 @@ hiddenimports += [
 ]
 
 # 随包素材。ffmpeg 和字体放包根，config.py 按 exe 同目录去找。
+#
+# licenses/ 必须随包 —— 随包的 ffmpeg 是 GPLv3 构建，且 PyAV 自带
+# libx264/libx265（GPLv2）两个 DLL 加载进本进程，对外分发时要附许可与
+# 源码获取说明。详见 licenses/ffmpeg/SOURCE-OFFER.md。
+# `打包.bat` 另外把它拷一份进 web/，让界面页脚能直接链过去。
 datas += [
     ("ffmpeg.exe", "."),
     ("fonts", "fonts"),
+    ("licenses", "licenses"),
     ("web", "web"),
 ]
+
+# ⚠️ 别试图从 av.libs 里剔掉 libx264/libx265 来「去掉 GPL 依赖」。
+# 实测：这两个 DLL 在 avcodec 的 **load-time import 表**（.idata）里，
+# 不是 delay-load。移走后 avcodec 直接加载失败
+# （`Could not find module ... or one of its dependencies`），
+# PyAV 起不来 → faster_whisper 的音频解码断掉 → 语音识别整条链废掉。
+# 放回去立刻恢复（对照实验已做）。只能保留并在 licenses/ 里如实声明。
 
 a = Analysis(
     ["ave/launcher.py"],

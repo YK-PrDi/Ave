@@ -1,0 +1,84 @@
+随包 ffmpeg 构建信息
+====================
+
+本文件由 `准备素材.py` 生成，数据来自对随包 ffmpeg.exe 的实际探测，
+不是手抄的。换 ffmpeg 来源后重跑该脚本刷新本文件。
+
+## 二进制标识
+
+版本字符串   ffmpeg version n8.1.2-44-g7c533d0f86-20260815 Copyright (c) 2000-2026 the FFmpeg developers
+文件大小     144442368 字节
+SHA256       5d5e06fbb900fd7a45a82eb0529e67f905853432139f673ac90aff45930504d8
+
+## 许可状态（ffmpeg 自报，`ffmpeg -L` 原文）
+
+    ffmpeg is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+    (at your option) any later version.
+
+    ffmpeg is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with ffmpeg.  If not, see <http://www.gnu.org/licenses/>.
+
+configure 里带 --enable-gpl 与 --enable-version3，因此本构建整体按
+**GPL version 3 or later** 分发。许可全文见同目录 COPYING.GPLv3。
+
+启用的 GPL-only 外部库（对应 FFmpeg configure 的 EXTERNAL_LIBRARY_GPL_LIST）：
+libx264、libx265 —— 二者自身为 GPLv2 or later，全文见 ../x264/ 与 ../x265/。
+
+## 上游来源
+
+构建者      BtbN/FFmpeg-Builds（GitHub Actions 自动构建）
+Release     autobuild-2026-08-15-13-02
+资产名      ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1.zip
+资产 SHA256 0e7829b6e1ba867e37bbad17153de258bd3bffaa3b745626a6424df0ea113970
+            （取自同 release 的 checksums.sha256，本目录存有副本）
+取用文件    压缩包内 bin/ffmpeg.exe
+
+⚠ 不要引用 `latest` 那个 tag。它是滚动的 —— 实测同名资产
+  ffmpeg-n8.1-latest-win64-gpl-8.1.zip 会被原地重新上传
+  （release published_at 与资产 updated_at 同为 2026-08-15T13:26 一线），
+  过段时间下回来的已不是这一份。上面这个 autobuild tag 是钉死的，
+  资产文件名也自带精确版本号。
+
+FFmpeg 上游 commit
+  7c533d0f86f13a06ec93968f6194349665b3536a
+  （2026-08-14T23:17:34Z，已核实存在于 FFmpeg/FFmpeg 上游）
+
+对应源码（Corresponding Source）的获取方式见 SOURCE-OFFER.md。
+
+## configure 全文
+
+    --prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-
+    config --cross-prefix=x86_64-w64-mingw32- --arch=x86_64 --target-
+    os=mingw32 --enable-gpl --enable-version3 --disable-debug
+    --disable-w32threads --enable-pthreads --enable-iconv --enable-zlib
+    --enable-libxml2 --enable-libvmaf --enable-fontconfig --enable-libharfbuzz
+    --enable-libfreetype --enable-libfribidi --enable-vulkan --enable-
+    libshaderc --enable-libvorbis --disable-libxcb --disable-xlib --disable-
+    libpulse --enable-gmp --enable-lzma --enable-liblcevc-dec --enable-opencl
+    --enable-amf --enable-libaom --enable-libaribb24 --enable-avisynth
+    --enable-chromaprint --enable-libdav1d --enable-libdavs2 --enable-
+    libdvdread --enable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec
+    --enable-cuda-llvm --enable-frei0r --enable-libgme --enable-libkvazaar
+    --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl
+    --enable-libmp3lame --enable-libopus --enable-libplacebo --enable-librist
+    --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp
+    --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-
+    liboapv --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-
+    libopenh264 --enable-libopenjpeg --enable-libopenmpt --enable-librav1e
+    --enable-librubberband --enable-schannel --enable-sdl2 --enable-libsnappy
+    --enable-libsoxr --enable-libsrt --enable-libsvtav1 --enable-libtwolame
+    --enable-libuavs3d --disable-libdrm --enable-vaapi --enable-libvidstab
+    --enable-libvvenc --disable-whisper --enable-libx264 --enable-libx265
+    --enable-libxavs2 --enable-libxvid --enable-libzimg --enable-libzvbi
+    --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs=-lgomp
+    --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-w64-mingw32-gcc
+    --cxx=x86_64-w64-mingw32-g++ --ar=x86_64-w64-mingw32-gcc-ar
+    --ranlib=x86_64-w64-mingw32-gcc-ranlib --nm=x86_64-w64-mingw32-gcc-nm
+    --extra-version=20260815

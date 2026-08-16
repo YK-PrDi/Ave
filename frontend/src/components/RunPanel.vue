@@ -24,6 +24,20 @@ const doneEv = computed(() =>
   props.events.find((e) => e.type === 'done' || e.type === 'stopped'),
 )
 
+// ASR 预热。发生在 start **之前** —— 全新安装时缓存空，这一步要跑两分钟，
+// 期间没有 start 事件，下面那套进度条全是 0，看着像卡死。
+// 所以这段单独显示，只取最后一个（事件是递增的，留最新那条就够）。
+const prewarmEvs = computed(() => props.events.filter((e) => e.type === 'prewarm'))
+const prewarm = computed(() => prewarmEvs.value[prewarmEvs.value.length - 1])
+// 预热完成的判据是 start 已到，不是预热进度跑满 —— 中途出错也要能收尾
+const prewarming = computed(() => !!prewarm.value && !startEv.value)
+const prewarmPercent = computed(() => {
+  const e = prewarm.value
+  if (!e?.total) return 0
+  return Math.round(((e.done ?? 0) / e.total) * 100)
+})
+const prewarmFails = computed(() => prewarmEvs.value.filter((e) => e.error).length)
+
 const total = computed(() => startEv.value?.total ?? 0)
 const failCount = computed(() => items.value.filter((e) => !e.ok).length)
 const percent = computed(() =>
@@ -77,6 +91,21 @@ const notes = computed(() => {
     <p v-if="props.error" class="err">{{ props.error }}</p>
 
     <template v-if="props.events.length">
+      <div v-if="prewarming" class="prewarm">
+        <div class="bar">
+          <div class="fill warm" :style="{ width: prewarmPercent + '%' }" />
+        </div>
+        <div class="meta">
+          <span>识别卖点口播（首次运行需要，之后走缓存）</span>
+          <span class="dim">
+            {{ prewarm?.done ?? 0 }} / {{ prewarm?.total ?? 0 }}
+          </span>
+          <span v-if="prewarmFails" class="bad">失败 {{ prewarmFails }}</span>
+          <span class="spacer" />
+          <span class="dim ell">{{ prewarm?.file }}</span>
+        </div>
+      </div>
+
       <div class="bar">
         <div class="fill" :style="{ width: percent + '%' }" />
       </div>
@@ -139,6 +168,18 @@ const notes = computed(() => {
   height: 100%;
   background: linear-gradient(90deg, #3d7a80, #4a9eff);
   transition: width 0.3s;
+}
+.fill.warm {
+  background: linear-gradient(90deg, #806a3d, #ffd98c);
+}
+.prewarm {
+  padding-bottom: 4px;
+}
+.ell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
 }
 .meta {
   display: flex;

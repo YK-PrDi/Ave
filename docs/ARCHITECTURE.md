@@ -85,14 +85,79 @@
 实测强制用它出片：29.0MB / 3.7s，ffprobe 确认 h264 720x1280 24fps 919 帧
 38.29s + aac 双声道 —— **软编码路径已验证，不是只加了配置**。
 
+### GPL 义务：不止 ffmpeg.exe【2026-08-16 实测】
+
+许可文件、源码承诺、依赖清单都在 **`licenses/`**（进版本库）。
+索引 `licenses/README.md`，浏览器版 `licenses/index.html`，界面页脚有入口。
+
+随包 `ffmpeg.exe` 的 `ffmpeg -L` 自报 **GPL version 3 or later**，
+configure 带 `--enable-gpl --enable-version3 --enable-libx264 --enable-libx265`。
+
+**⚠ `av.libs/` 里还有两个 GPL DLL，随 PyAV 18.1.0 的 wheel 来的，我们从没要过**：
+
+```
+libx264-165-*.dll   2.2MB      libx265-*.dll
+```
+
+性质与 `ffmpeg.exe` **不同**：后者是 `subprocess.run()` 起的独立进程
+（`render.py:27`、`asr.py:67`），隔着进程边界；这两个是**加载进 Ave 自己进程**的
+（`faster_whisper/audio.py:15` 的 `import av`）。
+
+**删除试验做了，结论：删不掉。** 解析 `avcodec` 的 PE 导入表 ——
+这两个在 **load-time import（`.idata`）**里，19 个导入项就有它们，不是 delay-load。
+移走后 `avcodec` 直接 `Could not find module ... or one of its dependencies`，
+PyAV 起不来 → 语音识别整条链废掉；放回去立刻恢复（对照实验）。
+`Ave.spec` 里写了注释防后人再试。
+
+`avcodec_license()` 自报 `LGPL version 3 or later`，但 configure 带
+`--enable-libx264/x265`，而这俩在 FFmpeg `configure` 的
+`EXTERNAL_LIBRARY_GPL_LIST`（第 1997-1998 行）里。自报值与实际链接内容不一致，
+**按 x264/x265 的 GPLv2 走是安全假设**。要彻底移除只剩自编 PyAV 一条路，成本远高于收益。
+
+**⚠ 源码承诺不能引用 BtbN 的 `latest` tag** —— 它是滚动的。实测 release
+`published_at` 2026-08-15T13:26:38Z，同名资产
+`ffmpeg-n8.1-latest-win64-gpl-8.1.zip` 的 `updated_at` 同刻被**原地重新上传**。
+过段时间下回来就不是包里这份了，等于没给源码。改用钉死的
+`autobuild-2026-08-15-13-02` + `ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1.zip`
+（文件名自带精确版本）。上游 commit `7c533d0f86f13a06ec93968f6194349665b3536a`
+已核实存在（2026-08-14T23:17:34Z）。
+`准备素材.py` 里的 `FFMPEG_URL` 与 `SOURCE-OFFER.md` 是同一个 release，
+`--check` 校验两处没漂。
+
+🔴 **`SOURCE-OFFER.md` 里仍有 `<待填>`（源码归档 URL）—— 对外分发前必须补。**
+写文档不等于履行义务，得真有个能下载到东西的地方。
+
 ### 字体：两种随包带，config 开关切换【2026-08-15】
 
 | 字体 | 文件 | 授权 |
 |---|---|---|
-| 新青年体（默认） | `fonts/新青年体.ttf` 1.3MB | ⚠️ Pillow 读出的字族名就是 `WenYue XinQingNianTi (Non-Commercial Use)`，**商用风险已实证** |
-| 思源黑体 SC Bold | `fonts/SourceHanSansSC-Bold.otf` 17.0MB | SIL OFL，可商用 |
+| **阿里巴巴普惠体 3.0 Heavy（默认）** | `fonts/AlibabaPuHuiTi-3-105-Heavy.ttf` | 免费商用，无需授权/付费/署名 |
+| 思源黑体 SC Bold（回落） | `fonts/SourceHanSansSC-Bold.otf` 17.0MB | SIL OFL，可商用 |
+| 新青年体 | `fonts/新青年体.ttf` 1.3MB | ⚠️ Pillow 读出的字族名就是 `WenYue XinQingNianTi (Non-Commercial Use)`，**商用风险已实证** |
 
-切 `config.SUBTITLE_FONT` 即可换。两种都经 `subtitle.py` 实渲字幕 PNG 通过。
+切 `config.SUBTITLE_FONT` 即可换（`普惠体` / `普惠体Black` / `思源黑体` / `新青年体`）。
+
+**默认值两次变更**：2026-08-16 先从新青年体改成思源黑体（带货是商用，
+默认值不该踩非商用授权），同日用户定为**阿里巴巴普惠体 3.0**。
+选 Heavy(105) 不选 Black(115) 做默认：115 太重，笔画多的字
+（镂/潮/腻）在 720x1280 字幕尺寸下容易糊成一团。想更重切 `普惠体Black`。
+
+**⚠️ 普惠体不由脚本自动下载，必须手动**【2026-08-16 实测三条渠道全不通】：
+
+| 渠道 | 结果 |
+|---|---|
+| ⛔ `puhuiti.com` | **不是官方，是色情站，别访问**。我曾误当官网写进文档，无头浏览器超时、从未真正加载过就当事实用了 |
+| 阿里 OSS 直链 | **403 Forbidden**（两个字重都试） |
+| GitHub | 18 个仓库**全是非官方转载**（0~25 stars） |
+
+从随机镜像下字体二进制不做 —— 无法验证是否官方原版及授权文件真伪，
+与那份 1.44MB 假 OTF（magic 是 `OTTO` 看着像真的，Pillow 报
+`hmtx table missing`）同类风险但更隐蔽。
+
+**所以 `find_font()` 改成按 `FONT_FALLBACK` 自动回落**
+（`普惠体 → 思源黑体 → 新青年体`），缺普惠体时退到思源黑体继续出片，
+不让字幕整条链崩掉。实测普惠体缺失时正确解析到思源黑体、Pillow 加载正常。
+`准备素材.py --check` 会报「缺失（有回落，不阻塞）」并给下载指引。
 
 ⚠️ **思源黑体别走 `raw.githubusercontent` 拿单文件**。
 `OTF/SimplifiedChinese/SourceHanSansSC-Bold.otf` 那个路径下回来只有 1.44MB

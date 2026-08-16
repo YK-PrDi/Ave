@@ -28,6 +28,8 @@
 | `ave/server.py` | 本地 HTTP 服务，只听 127.0.0.1 | 8756 | 对外监听；把路由加在 StaticFiles 挂载之后 |
 | `ave/launcher.py` | exe 入口：`--pick-dir`（后续补抢端口/下模型/起服务） | — | 在这里写业务逻辑 |
 | `frontend/` | Vue3 界面 | 5173 | 直接读本地文件路径（浏览器拿不到，须走后端） |
+| `licenses/` | 第三方许可 + GPL 源码承诺，**进版本库** | — | 分发时漏掉它（随包 ffmpeg 是 GPLv3） |
+| `准备素材.py` | 补齐不进版本库的 ffmpeg / 字体 | — | 把下载源改成 BtbN 的 `latest`（滚动 tag，源码承诺会漂） |
 
 ## 架构铁律（违反 = 改爆）
 

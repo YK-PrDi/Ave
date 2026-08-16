@@ -52,8 +52,11 @@ export interface JobParams {
 
 // 渲染进度事件。type 决定其余字段是否存在。
 export interface JobEvent {
-  type: 'start' | 'item' | 'done' | 'stopped' | 'error' | 'eof'
+  // prewarm：渲染前的 ASR 预热。全新安装时缓存是空的，这一步要跑两分钟，
+  // 没有它界面会静默停在「渲染中」看起来像卡死。
+  type: 'start' | 'prewarm' | 'item' | 'done' | 'stopped' | 'error' | 'eof'
   at?: number
+  done?: number
   total?: number
   encoder?: string
   backend?: string

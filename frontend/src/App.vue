@@ -235,6 +235,13 @@ onUnmounted(() => unsubscribe?.())
       @refresh="loadOutputs"
       @deleted="loadOutputs"
     />
+
+    <!-- 随包带了 GPL 的 ffmpeg 和 x264/x265，对外分发要能看到许可声明。
+         licenses/ 由 打包.bat 拷进 web/，所以这里是同源相对路径。 -->
+    <footer>
+      <a href="licenses/index.html" target="_blank" rel="noopener">开源许可</a>
+      <span class="dim">ffmpeg（GPLv3）· x264 / x265（GPLv2）· 思源黑体（OFL）</span>
+    </footer>
   </div>
 </template>
 
@@ -261,5 +268,16 @@ h1 {
 .sub {
   color: var(--dim);
   font-size: 13px;
+}
+footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+  font-size: 12px;
+}
+footer .dim {
+  color: var(--dim);
 }
 </style>
