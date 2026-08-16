@@ -10,6 +10,18 @@ models/
 # BGM 素材（运营提供，有版权，不进版本库）
 bgm/
 
+# 随包分发的二进制素材，体积大且各有授权，不进版本库。
+# 获取方式见 docs/进度与待办.md 落地 4。
+# ffmpeg.exe  GPL full build（含 libx264），约 87MB
+# fonts/      新青年体（⚠ 标注 Non-Commercial）+ 思源黑体 SC Bold（SIL OFL）
+ffmpeg.exe
+fonts/
+
+# 打包产物
+build/
+dist/
+web/
+
 # Python
 __pycache__/
 *.py[cod]

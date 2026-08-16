@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { api, comboIndexOf } from '../api'
-import type { ComboItem, OutputFile } from '../api'
+import { api } from '../api'
+import type { OutputFile } from '../api'
 
 const props = defineProps<{
   files: OutputFile[]
   dir: string
   loading: boolean
-  combos: ComboItem[]
   outDir: string
 }>()
 
@@ -22,18 +21,6 @@ const durations = ref<Record<string, number>>({})
 const totalMb = computed(() =>
   Math.round(props.files.reduce((s, f) => s + f.size_mb, 0)),
 )
-
-// 成品序号 → 组合明细，用来在列表里显示这条是什么组合
-const comboBy = computed(() => {
-  const m = new Map<number, ComboItem>()
-  props.combos.forEach((c) => m.set(c.index, c))
-  return m
-})
-
-function detail(name: string): ComboItem | undefined {
-  const i = comboIndexOf(name)
-  return i === null ? undefined : comboBy.value.get(i)
-}
 
 function toggle(name: string) {
   playing.value = playing.value === name ? null : name
@@ -89,11 +76,12 @@ async function remove(name: string) {
           </button>
           <div class="info">
             <span class="name">{{ f.name }}</span>
-            <span v-if="detail(f.name)" class="combo">
-              {{ detail(f.name)!.hook }}
-              <i>+{{ detail(f.name)!.points.length }} 卖点</i>
-              {{ detail(f.name)!.ending }}
+            <span v-if="f.combo" class="combo">
+              {{ f.combo.hook }}
+              <i>+{{ f.combo.points.length }} 卖点</i>
+              {{ f.combo.ending }}
             </span>
+            <span v-else class="combo na">组合信息不可用（渲染时未记录）</span>
           </div>
           <span class="dim size">
             <template v-if="durations[f.name]">{{ fmtDur(durations[f.name]) }} · </template>
@@ -114,13 +102,20 @@ async function remove(name: string) {
             preload="metadata"
             @loadedmetadata="onLoaded(f.name, $event)"
           />
-          <div v-if="detail(f.name)" class="chain">
-            <span class="seg hook">{{ detail(f.name)!.hook }}</span>
-            <span v-for="(p, i) in detail(f.name)!.points" :key="i" class="seg">
+          <div v-if="f.combo" class="chain">
+            <span class="seg hook">{{ f.combo.hook }}</span>
+            <span v-for="(p, i) in f.combo.points" :key="i" class="seg">
               <i>{{ i + 1 }}</i>{{ p }}
             </span>
-            <span class="seg end">{{ detail(f.name)!.ending }}</span>
+            <span class="seg end">{{ f.combo.ending }}</span>
+            <span class="meta dim">
+              #{{ f.combo.index }}
+              <template v-if="f.combo.seed !== null"> · seed {{ f.combo.seed }}</template>
+            </span>
           </div>
+          <p v-else class="chain na">
+            这条渲染时还没有组合清单，无法确定真实构成。重渲后可见。
+          </p>
         </div>
       </li>
     </ul>
@@ -191,6 +186,15 @@ async function remove(name: string) {
   font-style: normal;
   color: #6f7b8a;
   margin: 0 4px;
+}
+.na {
+  color: #6f7b8a;
+  font-style: italic;
+}
+.meta {
+  font-size: 11px;
+  align-self: center;
+  font-variant-numeric: tabular-nums;
 }
 .size {
   font-size: 12px;

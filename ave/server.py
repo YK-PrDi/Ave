@@ -19,6 +19,7 @@
 import os
 import queue
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -51,6 +52,8 @@ class PreviewReq(BaseModel):
     hook_limit: int | None = None
     seed: int | None = None
     limit: int = 0
+    # 卖点语义去重。关掉则同一条里可能出现多个卖点讲同一件事
+    dedup: bool = True
 
 
 class JobReq(PreviewReq):
@@ -91,6 +94,7 @@ class Job:
                 hook_limit=self.req.hook_limit, limit=self.req.limit,
                 seed=self.req.seed, out_dir=self.req.out_dir,
                 bgm_dir=self.req.bgm_dir, sub_size=self.req.sub_size,
+                dedup=self.req.dedup,
                 on_event=self.on_event, should_stop=self.should_stop)
             self.status = "stopped" if self._stop.is_set() else "done"
         except (RuntimeError, OSError, ValueError) as e:
@@ -153,6 +157,7 @@ def preview(req: PreviewReq):
     if not os.path.isdir(src):
         raise HTTPException(400, f"目录不存在: {src}")
     pools, stats = pipeline.scan(src)
+    theme_map, theme_note = pipeline.build_theme_map(pools, req.dedup)
     try:
         combos = combo.build_combos(
             pools,
@@ -160,7 +165,7 @@ def preview(req: PreviewReq):
             else config.POINT_COUNT,
             hook_limit=req.hook_limit if req.hook_limit is not None
             else config.HOOK_USE_LIMIT,
-            seed=req.seed)
+            seed=req.seed, theme_map=theme_map)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     if req.limit:
@@ -168,6 +173,8 @@ def preview(req: PreviewReq):
     return {
         "stats": stats,
         "total": len(combos),
+        "theme_note": theme_note,
+        "themes": len(set(theme_map.values())) if theme_map else 0,
         "combos": [{
             "index": c.index,
             "hook": c.hook.label,
@@ -245,6 +252,9 @@ def outputs(out_dir: str | None = None):
     d = out_dir or config.OUTPUT_DIR
     if not os.path.isdir(d):
         return {"dir": d, "files": []}
+    # 组合明细取自渲染时落盘的清单，不按序号去对当次预览结果 ——
+    # 预览不传 seed 会重新随机，序号对不上当初渲的那条【实测】。
+    manifest = pipeline.read_manifest(d)
     files = []
     for f in sorted(os.listdir(d)):
         if not f.lower().endswith(".mp4"):
@@ -252,7 +262,9 @@ def outputs(out_dir: str | None = None):
         p = os.path.join(d, f)
         st = os.stat(p)
         files.append({"name": f, "size_mb": round(st.st_size / 1e6, 1),
-                      "mtime": int(st.st_mtime)})
+                      "mtime": int(st.st_mtime),
+                      # 旧成品没有记录，返回 null，界面显示"不可用"而不是猜
+                      "combo": manifest.get(f)})
     return {"dir": d, "files": files}
 
 
@@ -290,6 +302,7 @@ def delete_output(name: str, out_dir: str | None = None):
     """删掉一条成品。组合质量不合意时在界面上直接清掉。"""
     p = _safe_output_file(name, out_dir)
     os.remove(p)
+    pipeline.prune_manifest(os.path.dirname(p), os.path.basename(p))
     return {"ok": True, "name": os.path.basename(p)}
 
 
@@ -315,26 +328,37 @@ def pick_dir(req: PickReq):
 
     对话框跑在独立进程里 —— 直接在服务进程内起 tkinter 会和
     uvicorn 的事件循环打架，且 tkinter 要求在主线程创建窗口。
+
+    **子进程必须走 `sys.executable`**，不准硬编码 `"python"`：
+    办公机不装 Python，写死 `python` 这按钮必然失败。
+    冻结态 `sys.executable` 是 Ave.exe，直接加 `--pick-dir`（exe 不认 `-c`）；
+    源码态是 python.exe，调 `-m ave.launcher --pick-dir`。
     """
-    code = (
-        "import tkinter as tk\n"
-        "from tkinter import filedialog\n"
-        "r = tk.Tk()\n"
-        "r.withdraw()\n"
-        "r.attributes('-topmost', True)\n"
-        f"p = filedialog.askdirectory(title={req.title!r}, "
-        f"initialdir={req.initial or os.path.expanduser('~')!r})\n"
-        "print(p or '')\n"
-    )
+    argv = [sys.executable]
+    if not getattr(sys, "frozen", False):
+        argv += ["-m", "ave.launcher"]
+    argv += ["--pick-dir", req.title, req.initial or os.path.expanduser("~")]
     try:
-        r = subprocess.run(["python", "-c", code], capture_output=True,
-                           text=True, timeout=300)
+        r = subprocess.run(argv, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=300,
+                           cwd=os.path.dirname(os.path.dirname(
+                               os.path.abspath(__file__))))
     except subprocess.TimeoutExpired:
         raise HTTPException(408, "选择超时") from None
     if r.returncode != 0:
         raise HTTPException(500, f"打开选择框失败: {r.stderr[-200:]}")
     path = r.stdout.strip()
     return {"path": os.path.normpath(path) if path else None}
+
+
+# ---------------- 前端静态文件 ----------------
+# ⚠️ **必须放在所有 API 路由定义之后**。挂在 "/" 上的 StaticFiles 会吞掉
+# 它之后注册的同前缀路由 —— 写在上面会把 /api/* 全遮蔽掉。
+# 开发期没有 web/ 目录就跳过，vite 的 5173 流程不受影响。
+_WEB_DIR = config._resource("web")
+if os.path.isdir(_WEB_DIR):
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=_WEB_DIR, html=True), name="web")
 
 
 def main():

@@ -32,6 +32,9 @@ export interface ComboItem {
 export interface Preview {
   stats: ScanStats
   total: number
+  // 聚类说明，如「33 个卖点组 → 16 个主题（31 组用 ASR 原文…）」
+  theme_note: string
+  themes: number
   combos: ComboItem[]
 }
 
@@ -44,6 +47,7 @@ export interface JobParams {
   out_dir?: string
   bgm_dir?: string
   sub_size?: number
+  dedup?: boolean
 }
 
 // 渲染进度事件。type 决定其余字段是否存在。
@@ -65,16 +69,22 @@ export interface JobEvent {
   failed?: { index: number; error: string }[]
 }
 
+// 渲染时落盘的真实构成。后端从 .ave-manifest.json 读出来一并返回。
+export interface ComboRecord {
+  index: number
+  seed: number | null
+  hook: string
+  points: string[]
+  ending: string
+  at: number
+}
+
 export interface OutputFile {
   name: string
   size_mb: number
   mtime: number
-}
-
-// 成品文件名形如 混剪_007.mp4，尾号即组合序号，用来关联组合明细
-export function comboIndexOf(name: string): number | null {
-  const m = name.match(/(\d+)\.mp4$/i)
-  return m ? parseInt(m[1], 10) : null
+  // 旧成品渲染时还没有清单，为 null
+  combo: ComboRecord | null
 }
 
 const BASE = '/api'

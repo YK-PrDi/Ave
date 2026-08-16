@@ -15,8 +15,11 @@ import subprocess
 # BGM 相对配音压低多少（分贝）。口播要压得住 BGM。
 BGM_GAIN_DB = -18.0
 
-# 编码器优先级：硬编码优先，都不可用时报错而不是静默出废片
-ENCODER_CANDIDATES = ["h264_nvenc", "h264_qsv", "h264_amf", "h264_mf"]
+# 编码器优先级：硬编码优先，末位 libx264 软编码兜底。
+# 兜底是随包带完整 ffmpeg 后才有的 —— 剪映那份没有 libx264，
+# 当时四个硬编码器全不可用只能报错。现在无独显的办公机也能跑，只是慢些。
+ENCODER_CANDIDATES = ["h264_nvenc", "h264_qsv", "h264_amf", "h264_mf",
+                      "libx264"]
 
 
 def pick_encoder(ffmpeg):
@@ -28,8 +31,8 @@ def pick_encoder(ffmpeg):
         if e in avail:
             return e
     raise RuntimeError(
-        "找不到可用的 h264 编码器。剪映自带 ffmpeg 无 libx264，"
-        "需要显卡或 MediaFoundation 支持。")
+        "找不到可用的 h264 编码器。随包的 ffmpeg 应含 libx264 —— "
+        "若报这个错说明用的是裁剪版 ffmpeg（如剪映自带那份）。")
 
 
 def build_filter(n_clips, subs, has_bgm, total_dur):

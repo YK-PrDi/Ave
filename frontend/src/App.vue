@@ -19,8 +19,11 @@ const hookLimit = ref(3)
 const subSize = ref(12)
 const seed = ref<number | null>(null)
 const limit = ref(0)
+// 默认开：实测关掉后 30.8/39 条会出现同主题重复
+const dedup = ref(true)
 
 const combos = ref<ComboItem[]>([])
+const themeNote = ref('')
 const previewing = ref(false)
 
 const running = ref(false)
@@ -57,6 +60,7 @@ function params() {
     seed: seed.value ?? undefined,
     limit: limit.value || 0,
     out_dir: outDir.value || undefined,
+    dedup: dedup.value,
   }
 }
 
@@ -119,6 +123,7 @@ async function doPreview() {
     const p = await api.preview(params())
     combos.value = p.combos
     stats.value = p.stats
+    themeNote.value = p.theme_note
   } catch (e) {
     error.value = String(e instanceof Error ? e.message : e)
     combos.value = []
@@ -199,6 +204,8 @@ onUnmounted(() => unsubscribe?.())
       v-model:sub-size="subSize"
       v-model:seed="seed"
       v-model:limit="limit"
+      v-model:dedup="dedup"
+      :theme-note="themeNote"
       :stats="stats"
     />
 
@@ -224,7 +231,6 @@ onUnmounted(() => unsubscribe?.())
       :files="outputs"
       :dir="outputsDir"
       :loading="loadingOutputs"
-      :combos="combos"
       :out-dir="outDir"
       @refresh="loadOutputs"
       @deleted="loadOutputs"

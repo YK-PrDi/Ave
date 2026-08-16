@@ -8,6 +8,8 @@ const props = defineProps<{
   subSize: number
   seed: number | null
   limit: number
+  dedup: boolean
+  themeNote: string
   stats: ScanStats | null
 }>()
 
@@ -17,6 +19,7 @@ const emit = defineEmits<{
   'update:subSize': [number]
   'update:seed': [number | null]
   'update:limit': [number]
+  'update:dedup': [boolean]
 }>()
 
 // 产量随参数实时变，让人调参时能立刻看到影响
@@ -92,6 +95,21 @@ const pointsTooMany = computed(
         <b>{{ expected }} 条</b>
       </div>
     </div>
+
+    <label class="toggle">
+      <input
+        type="checkbox" :checked="props.dedup"
+        @change="emit('update:dedup', ($event.target as HTMLInputElement).checked)"
+      />
+      <span>
+        <b>卖点自动分类去重</b>
+        <i>
+          按口播原文自动聚类，同一条里不放两个讲同一件事的卖点。
+          关掉则纯随机，接受重复。
+        </i>
+        <i v-if="props.themeNote" class="note">{{ props.themeNote }}</i>
+      </span>
+    </label>
   </section>
 </template>
 
@@ -137,5 +155,41 @@ label em.bad {
 }
 .out b {
   font-size: 22px;
+}
+/* 开关是横排的，覆盖上面 label 的 column 布局 */
+.toggle {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+}
+.toggle input {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.toggle > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 13px;
+  color: inherit;
+}
+.toggle b {
+  font-weight: 500;
+}
+.toggle i {
+  font-size: 11px;
+  color: var(--dim);
+  font-style: normal;
+  line-height: 1.5;
+}
+.toggle i.note {
+  color: #7f9ab8;
 }
 </style>

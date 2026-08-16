@@ -7,6 +7,7 @@
 """
 
 import argparse
+import json
 import os
 import random
 import shutil
@@ -17,6 +18,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import combo  # noqa: E402
 from ave import asr, config, render, subtitle, tts  # noqa: E402
+
+
+def build_theme_map(pools, dedup=True):
+    """算卖点语义簇。返回 (label->簇号, 说明文字)。
+
+    dedup=False 时返回空表 —— 抽样退化成只去变体不去语义，
+    等于接受同主题重复（界面上的开关走这条路）。
+    """
+    if not dedup:
+        return {}, "已关闭语义去重，同一条里可能出现多个卖点讲同一件事"
+    texts, from_asr = point_texts(pools)
+    tm = combo.auto_cluster(texts)
+    n = len(set(tm.values()))
+    note = (f"语义聚类：{len(texts)} 个卖点组 → {n} 个主题"
+            f"（{from_asr} 组用 ASR 原文，{len(texts) - from_asr} 组回落用标签）")
+    return tm, note
 
 
 def make_tts_backend():
@@ -65,6 +82,93 @@ def scan(source=None):
         # 产量 = 钩子组数 x 每钩子使用次数
         "expected": groups["hooks"] * config.HOOK_USE_LIMIT,
     }
+
+
+# ---------------- 成品清单 ----------------
+# 渲染时把实际用的组合落盘，界面据此显示每条成品的真实构成。
+# 不用内存里存 job 记录：CLI 跑出来的覆盖不到，且服务重启即失。
+MANIFEST_NAME = ".ave-manifest.json"
+
+
+def manifest_path(out_dir=None):
+    return os.path.join(out_dir or config.OUTPUT_DIR, MANIFEST_NAME)
+
+
+def read_manifest(out_dir=None):
+    """读成品清单，返回 {文件名: 记录}。文件不存在或坏了都返回空。"""
+    try:
+        with open(manifest_path(out_dir), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    items = data.get("items")
+    return items if isinstance(items, dict) else {}
+
+
+def record_manifest(out_dir, filename, cb, seed):
+    """追加一条记录。同名重渲直接覆盖，避免换 seed 后留下旧构成。"""
+    items = read_manifest(out_dir)
+    items[filename] = {
+        "index": cb.index,
+        "seed": seed,
+        "hook": cb.hook.label,
+        "points": [p.label for p in cb.points],
+        "ending": cb.ending.label,
+        "at": int(time.time()),
+    }
+    p = manifest_path(out_dir)
+    tmp = p + ".tmp"
+    # 先写临时文件再原子替换：中途崩掉不会留下半截 JSON 把清单读废
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"version": 1, "items": items}, f,
+                  ensure_ascii=False, indent=1)
+    os.replace(tmp, p)
+
+
+def prune_manifest(out_dir, filename):
+    """删成品时同步清掉记录，不留孤儿条目。"""
+    items = read_manifest(out_dir)
+    if items.pop(filename, None) is None:
+        return
+    p = manifest_path(out_dir)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"version": 1, "items": items}, f,
+                  ensure_ascii=False, indent=1)
+    os.replace(tmp, p)
+
+
+def point_texts(pools):
+    """每个卖点变体组的代表文本，用于语义聚类。
+
+    优先用 ASR 缓存里的口播原文 —— 那是观众真正听到的内容，
+    文件名标签只是人写的概括，可能有偏差。缓存里没有（还没识别过、
+    或被幻觉闸门判为无口播）就回落用标签的内容概括。
+
+    读缓存而不现场识别：识别 33 个片段要几十秒，而 `--limit 2` 这种
+    快速验证只需要几秒。缓存跑满后自动切到原文，聚类质量随之提升。
+    """
+    cache = {}
+    if os.path.isfile(config.ASR_CACHE):
+        try:
+            with open(config.ASR_CACHE, encoding="utf-8") as f:
+                cache = json.load(f)
+        except (OSError, ValueError):
+            cache = {}
+
+    texts, from_asr = {}, 0
+    for g in combo.group_variants(pools.points):
+        c = g[0]
+        t = ""
+        try:
+            r = cache.get(asr._cache_key(c.path)) or {}
+            t = " ".join(s["text"] for s in r.get("segments", [])).strip()
+        except OSError:
+            pass
+        if t:
+            from_asr += 1
+        texts[c.label] = t or c.desc
+    return texts, from_asr
 
 
 def build_one(cb, recognizer, backend, rng, work, encoder,
@@ -129,7 +233,7 @@ def build_one(cb, recognizer, backend, rng, work, encoder,
 
 
 def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
-        out_dir=None, bgm_dir=None, sub_size=None,
+        out_dir=None, bgm_dir=None, sub_size=None, dedup=True,
         on_event=None, should_stop=None):
     """跑一批混剪。命令行和 HTTP 层都走这里。
 
@@ -142,19 +246,21 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
             on_event(ev)
 
     pools, stats = scan(source)
+    theme_map, theme_note = build_theme_map(pools, dedup)
     combos = combo.build_combos(
         pools,
         point_count=points if points is not None else config.POINT_COUNT,
         hook_limit=hook_limit if hook_limit is not None
         else config.HOOK_USE_LIMIT,
-        seed=seed)
+        seed=seed, theme_map=theme_map)
     if limit:
         combos = combos[:limit]
 
     encoder = render.pick_encoder(config.FFMPEG)
     out_dir = out_dir or config.OUTPUT_DIR
     emit(type="start", total=len(combos), encoder=encoder,
-         backend=config.TTS_BACKEND, out_dir=out_dir, stats=stats)
+         backend=config.TTS_BACKEND, out_dir=out_dir, stats=stats,
+         dedup=dedup, theme_note=theme_note)
 
     recognizer = asr.Recognizer(config.MODEL_DIR, config.FFMPEG,
                                 config.ASR_CACHE)
@@ -174,6 +280,7 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
                                    config.WORK_DIR, encoder,
                                    out_dir=out_dir, bgm_dir=bgm_dir,
                                    sub_size=sub_size)
+            record_manifest(out_dir, os.path.basename(out), cb, seed)
             ok += 1
             all_notes.extend(notes)
             emit(type="item", index=cb.index, total=len(combos), ok=True,
@@ -207,6 +314,8 @@ def main():
                     help="每条用几个卖点")
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 条")
     ap.add_argument("--seed", type=int, default=None, help="固定随机种子")
+    ap.add_argument("--no-dedup", action="store_true",
+                    help="关闭卖点语义去重，接受同一条里出现近义卖点")
     ap.add_argument("--dry-run", action="store_true", help="只看组合不渲染")
     args = ap.parse_args()
 
@@ -218,9 +327,11 @@ def main():
             print(f"    {u}")
 
     if args.dry_run:
+        theme_map, note = build_theme_map(pools, not args.no_dedup)
+        print(note)
         combos = combo.build_combos(pools, point_count=args.points,
                                     hook_limit=config.HOOK_USE_LIMIT,
-                                    seed=args.seed)
+                                    seed=args.seed, theme_map=theme_map)
         if args.limit:
             combos = combos[:args.limit]
         print(f"组合方案: {len(combos)} 条\n")
@@ -232,6 +343,7 @@ def main():
         t = ev["type"]
         if t == "start":
             print(f"组合方案: {ev['total']} 条\n")
+            print(ev["theme_note"])
             print(f"编码器: {ev['encoder']}")
             print(f"配音后端: {ev['backend']}"
                   + ("  ⚠ 静音占位，等火山引擎凭证"
@@ -246,7 +358,7 @@ def main():
                       f"{ev['error'][:120]}")
 
     r = run(source=args.source, points=args.points, limit=args.limit,
-            seed=args.seed, on_event=on_event)
+            seed=args.seed, dedup=not args.no_dedup, on_event=on_event)
 
     print(f"\n完成 {r['ok']}/{r['total']} 条，用时 {r['seconds']:.0f}s")
     print(f"输出: {r['out_dir']}")
