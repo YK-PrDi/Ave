@@ -209,27 +209,50 @@ SUBTITLE_SHADOW = True   # 需求要求带阴影
 # ---------------- 配音 ----------------
 
 # 后端：'stub' 产出等时长静音（无凭证时验证全流程用）
-#      'volcano' 走火山引擎，需下面三项凭证
-# 三项凭证填齐后自动切 volcano，不用手动改这行（见下方 _tts_backend()）。
+#      'volcano' 走火山引擎，需三项凭证
+# 三项齐了自动切 volcano，不用手动改开关（见下方 _tts_backend()）。
 #
-# ┌─ 凭证怎么填：两种方式，二选一 ─────────────────────────────┐
-# │ A. 环境变量（推荐，不进 git）                              │
-# │      setx AVE_VOLCANO_APPID  "你的appid"                   │
-# │      setx AVE_VOLCANO_TOKEN  "你的token"                   │
-# │      setx AVE_VOLCANO_VOICE  "音色ID"                      │
-# │    setx 之后要**重开终端**才生效。                          │
-# │                                                            │
-# │ B. 直接写下面的字符串（省事，但⚠ 本文件进版本库，          │
-# │    凭证会被 git 记录 —— 别推到公开仓库）                    │
-# └────────────────────────────────────────────────────────────┘
-# Cluster 不用运营去控制台找 —— `volcano_tts` 是标准默认值。
+# ⚠️ **凭证不写在这个文件里**，读用户数据目录的 credentials.json：
+#
+#     %LOCALAPPDATA%\Ave\credentials.json
+#
+# 为什么不写在这：① 本文件进版本库，写这里会被 git 记录；
+# ② PyInstaller 把整个 `ave` 包打进 exe，写这里等于**谁拿到 exe 都能提取出
+# 你的 token**。放用户数据目录两条都避开了（和模型/缓存/BGM 同一套逻辑）。
+#
+# 换机器：单独拷那个 json 过去，别提交。
+# 也支持环境变量覆盖（优先级更高）：AVE_VOLCANO_APPID / TOKEN / VOICE。
+# Cluster 不用去控制台找 —— `volcano_tts` 是标准默认值。
 
-VOLCANO_APPID = os.environ.get("AVE_VOLCANO_APPID", "")
-VOLCANO_TOKEN = os.environ.get("AVE_VOLCANO_TOKEN", "")
-VOLCANO_CLUSTER = os.environ.get("AVE_VOLCANO_CLUSTER", "volcano_tts")
+CREDENTIALS_FILE = os.path.join(_USER_DIR, "credentials.json")
+
+
+def _load_credentials():
+    """读用户数据目录的凭证。文件不存在或坏了都返回空表，不抛异常 ——
+    没凭证只是回落 stub 静音，不该让 import config 就崩。"""
+    try:
+        import json
+        with open(CREDENTIALS_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+_CRED = _load_credentials()
+
+
+def _cred(key, default=""):
+    """环境变量优先，其次 credentials.json，最后默认值。"""
+    return os.environ.get(f"AVE_{key}") or _CRED.get(key) or default
+
+
+VOLCANO_APPID = _cred("VOLCANO_APPID")
+VOLCANO_TOKEN = _cred("VOLCANO_TOKEN")
+VOLCANO_CLUSTER = _cred("VOLCANO_CLUSTER", "volcano_tts")
 # 音色 ID。「小姐姐」是剪映内部显示名，火山引擎公开音色表里没有同名条目，
 # 需运营在控制台试听后提供最接近的 ID。
-VOLCANO_VOICE = os.environ.get("AVE_VOLCANO_VOICE", "")
+VOLCANO_VOICE = _cred("VOLCANO_VOICE")
 
 
 def _tts_backend():
