@@ -21,6 +21,7 @@ import argparse
 import hashlib
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -318,9 +319,26 @@ def check_offer_consistency():
         print(f"SOURCE-OFFER ✗ 没引用 {', '.join(bad)} —— 与本脚本不一致")
         return False
     print("SOURCE-OFFER ✓ 与本脚本引用同一个钉死的 release")
-    if "<待填>" in txt:
-        print("             ⚠ 里面还有 <待填> —— 源码归档 URL 没填，"
-              "对外分发前必须补上")
+    # 按「尖括号里带『填』字」匹配，不写死具体串。
+    # 曾经这里找的是 <待填>，文档后来改成 <发布时填>，这道检查静默失效了
+    # —— --check 照样打「素材齐全，可以打包」【2026-08-17 实测】。
+    holes = sorted(set(re.findall(r"<[^<>\n]*填[^<>\n]*>", txt)))
+    if holes:
+        print(f"             ⚠ 还有占位符 {' '.join(holes)} —— "
+              "源码归档没上传，仅对外分发前必须补")
+
+    # 归档文件本身在不在。填了 SHA256 不代表义务履行完了 ——
+    # 2026-08-17 填完哈希后占位符警告消失，这道提示就成了唯一的信号；
+    # 少了它，「还没上传到 release」这件事会彻底静默。
+    src = os.path.join(ROOT, "dist-src")
+    want = ("ffmpeg-src-7c533d0f86.tar.gz", "ffmpeg-builds-snapshot.tar.gz")
+    miss = [n for n in want if not os.path.isfile(os.path.join(src, n))]
+    if miss:
+        print(f"             ⚠ dist-src/ 缺 {', '.join(miss)} —— "
+              "重建命令见 SOURCE-OFFER.md 第四节")
+    else:
+        print("             ℹ 归档已留存 dist-src/，"
+              "但**尚未上传到 release**，对外分发前必须传")
     return True
 
 

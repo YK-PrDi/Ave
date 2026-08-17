@@ -45,16 +45,26 @@ Corresponding Source 包含「控制编译与安装的脚本」，不只是 ffmp
 
 | 内容 | 资产名 | SHA256 |
 |---|---|---|
-| FFmpeg 源码 | `ffmpeg-src-7c533d0f86.tar.gz` | `<发布时填>` |
-| 构建脚本快照（BtbN/FFmpeg-Builds） | `ffmpeg-builds-snapshot.tar.gz` | `<发布时填>` |
+| FFmpeg 源码 | `ffmpeg-src-7c533d0f86.tar.gz` | `6439e4277bccdb3224a64db06f0dd39b5272d8a1aab9b1a6a80c794e44e21860` |
+| 构建脚本快照（BtbN/FFmpeg-Builds） | `ffmpeg-builds-snapshot.tar.gz` | `3d59554604274dd229806133b0b67e9936687ac420975742f8a0da4e46140223` |
 | 上游 `checksums.sha256` | 本目录已存副本 | — |
 
 索取源码：在 `https://github.com/YK-PrDi/Ave/issues` 开 issue，
 或联系仓库所有者。本承诺自交付副本之日起 **至少三年内有效**。
 
-> 🔴 **SHA256 两栏要在真正上传后填。** 位置定了不等于义务履行完了 ——
-> 必须真有能下载到东西的资产躺在那个 release 里。
-> 具体操作见下方第四节。`python 准备素材.py --check` 会检查占位符还在不在。
+**两份归档已于 2026-08-17 下载留存**（本机 `dist-src/`，不进版本库）：
+16.9MB + 102KB。上游随时可能消失，所以先抓下来 —— 等 release 建好
+`gh release upload` 传的必须是这两个文件，别重新下载后再传
+（虽然 codeload 实测字节确定，但没必要多冒一次风险）。
+
+**SHA256 可复现性已验**：codeload 的 tarball 重下字节完全一致
+（构建脚本快照重下两次哈希相同）。所以上表的值现在就能钉死，
+不必等上传。⚠ 但**别用本地 `tar czf` 重新打包** —— gzip 会把时间戳
+写进字节流，同一份源码打两次哈希不同，那样上表就对不上了。
+
+> 🔴 **资产还没上传到 release**（还没建 release）。哈希已钉死、文件已留存，
+> 但**对外分发前必须真把它们传上去** —— 写了哈希不等于别人能下到东西。
+> 具体操作见下方第四节。`python 准备素材.py --check` 会检查占位符。
 
 **为什么选 GitHub Releases**：源码 zip 不该进 git 仓库本体（几十 MB 且每次
 更新存全量），但 Releases 的资产不占仓库历史，又和 exe 放在同一个地方 ——
@@ -137,21 +147,38 @@ Could not find module 'avcodec-62-....dll' (or one of its dependencies)
 ## 四、归档怎么做（给要对外分发的人）
 
 **归档位置已定（2026-08-16 用户决定）：GitHub Releases。**
-对外交付前把这三步做完，再回来把第二节表格的 SHA256 填上：
+
+**第 1、2 步已于 2026-08-17 做完** —— 两份归档在本机 `dist-src/`，
+SHA256 已填进第二节。剩下的只有第 3 步：
 
 ```bash
-# 1. 下源码并打包成 release 资产（名字要和第二节表格对上）
-curl -L -o ffmpeg-src-7c533d0f86.tar.gz \
-  https://github.com/FFmpeg/FFmpeg/archive/7c533d0f86f13a06ec93968f6194349665b3536a.tar.gz
-git clone --depth 1 https://github.com/BtbN/FFmpeg-Builds.git
-tar czf ffmpeg-builds-snapshot.tar.gz FFmpeg-Builds
-
-# 2. 算 SHA256（填进第二节表格）
-sha256sum ffmpeg-src-7c533d0f86.tar.gz ffmpeg-builds-snapshot.tar.gz
-
 # 3. 连同 exe 一起传到发布 release（gh CLI）
+cd dist-src
 gh release upload <tag> ffmpeg-src-7c533d0f86.tar.gz ffmpeg-builds-snapshot.tar.gz
 ```
+
+⚠ **传的必须是 `dist-src/` 里那两个文件**，别重新下载 —— 第二节的哈希是
+按它们算的。若归档丢了要重建，用下面的命令（**不是 `git clone` + `tar czf`**，
+后者的 gzip 时间戳会让哈希对不上）：
+
+```bash
+# FFmpeg 源码：codeload 直下，字节确定性已实测
+curl -L -o ffmpeg-src-7c533d0f86.tar.gz \
+  https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/7c533d0f86f13a06ec93968f6194349665b3536a
+
+# 构建脚本：按钉死的 commit 直下，不是 clone master
+curl -L -o ffmpeg-builds-snapshot.tar.gz \
+  https://codeload.github.com/BtbN/FFmpeg-Builds/tar.gz/590a6612d7d961e9258429e501619e0b7d7cbedf
+
+sha256sum ffmpeg-src-7c533d0f86.tar.gz ffmpeg-builds-snapshot.tar.gz  # 应与第二节一致
+```
+
+**⚠ 构建脚本必须钉 commit，`clone master` 是错的。** release 的
+`target_commitish` 只写着 `master`，拿不到精确 commit。
+`590a6612d7d961e9258429e501619e0b7d7cbedf` 是这么定的：它的 committer 时间
+`2026-08-13T12:17:18Z` 与该 release 的 `created_at` **完全一致**，
+即构建时的 master HEAD。这是依据时间戳的推定，不是 API 直接给的授权答案 ——
+但比 clone 今天的 master 准确得多（master 一直在往前走）。
 
 要求：接收方拿到二进制后**三年内**都能下到 —— 所以别删这些资产，
 也别把 release 改成 draft 或 pre-release 后又撤下。

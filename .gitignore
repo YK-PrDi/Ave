@@ -32,6 +32,12 @@ build/
 dist/
 web/
 
+# GPL 源码归档（17MB，待上传到 release）。⚠ `dist/` 不匹配它 ——
+# gitignore 的 `dist/` 只匹配名字正好是 dist 的目录。
+# 里面两个 tar.gz 的 SHA256 已钉进 licenses/ffmpeg/SOURCE-OFFER.md，
+# **别删** —— 要传到 release 的必须是这两个文件本身。
+dist-src/
+
 # Python
 __pycache__/
 *.py[cod]
