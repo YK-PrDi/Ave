@@ -56,6 +56,13 @@ datas += [
 # （`Could not find module ... or one of its dependencies`），
 # PyAV 起不来 → faster_whisper 的音频解码断掉 → 语音识别整条链废掉。
 # 放回去立刻恢复（对照实验已做）。只能保留并在 licenses/ 里如实声明。
+#
+# ⚠️ 但「剔 DLL」不等于「摘掉 PyAV 依赖」—— 后者另有一条路，2026-08-17
+# 部分验过：transcribe() 收 numpy waveform，可用随包 ffmpeg.exe 解码替代
+# PyAV（实测相关系数 1.0、识别文本逐字相同）。卡点是 av 在
+# faster_whisper/__init__.py 第 1 行就导入，连 WhisperModel 都拖着它。
+# **接入宿主项目（羽刃）对外发布前必读 docs/进度与待办.md 第六节** ——
+# 那里有完整的传染范围分析和决策依据。别只看本注释就下结论。
 
 a = Analysis(
     ["ave/launcher.py"],
