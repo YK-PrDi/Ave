@@ -6,8 +6,8 @@
 后端可换。当前两个：
   StubBackend   —— 产出等时长静音。**没有凭证也能跑通整条 pipeline**，
                    用来验证组合/字幕/渲染，不用等运营开通火山引擎
-  VolcanoBackend —— 火山引擎大模型语音合成。**接口未实测**，
-                   凭证和音色 ID 到位后需验证
+  VolcanoBackend —— 火山引擎大模型语音合成。**2026-08-16 起已实测出片**，
+                   全量 39 条实跑过（2026-08-17）。网络抖动会读超时，故带重试
 
 音色说明：「小姐姐」不在火山引擎公开音色表里（那是剪映 App 内部显示名）。
 音色 ID 形如 zh_female_shuangkuaisisi_moon_bigtts，需运营从控制台取。
@@ -16,6 +16,7 @@
 import json
 import os
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -121,6 +122,9 @@ class VolcanoBackend:
 
     name = "volcano"
     ENDPOINT = "https://openspeech.bytedance.com/api/v1/tts"
+    TIMEOUT = 30
+    RETRIES = 3
+    BACKOFF = 1.5  # 秒，指数退避：1.5 → 3.0
 
     def __init__(self, appid, access_token, voice_type, cluster="volcano_tts"):
         self.appid = appid
@@ -133,26 +137,42 @@ class VolcanoBackend:
         import urllib.error
         import urllib.request
 
-        payload = {
-            "app": {"appid": self.appid, "token": self.access_token,
-                    "cluster": self.cluster},
-            "user": {"uid": "ave-remix"},
-            "audio": {"voice_type": self.voice_type, "encoding": "mp3",
-                      "speed_ratio": round(speed, 3)},
-            "request": {"reqid": str(uuid.uuid4()), "text": text,
-                        "operation": "query"},
-        }
-        req = urllib.request.Request(
-            self.ENDPOINT,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json",
-                     "Authorization": f"Bearer;{self.access_token}"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, ValueError, OSError) as e:
-            raise RuntimeError(f"火山引擎 TTS 调用失败: {e}") from e
+        def build_req():
+            # reqid 每次重试都换新的。服务端若按 reqid 做幂等去重，
+            # 复用同一个可能直接拿回上次的失败结果，重试就白做了。
+            payload = {
+                "app": {"appid": self.appid, "token": self.access_token,
+                        "cluster": self.cluster},
+                "user": {"uid": "ave-remix"},
+                "audio": {"voice_type": self.voice_type, "encoding": "mp3",
+                          "speed_ratio": round(speed, 3)},
+                "request": {"reqid": str(uuid.uuid4()), "text": text,
+                            "operation": "query"},
+            }
+            return urllib.request.Request(
+                self.ENDPOINT,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bearer;{self.access_token}"},
+            )
+
+        # 一条片子要调 5~6 次，全量 39 条约 270 次。实测 0.4% 会读超时
+        # （2026-08-17 全量跑 #6 挂在 read timeout），不重试就是整条出片失败。
+        last = None
+        for attempt in range(self.RETRIES):
+            try:
+                with urllib.request.urlopen(
+                        build_req(), timeout=self.TIMEOUT) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                break
+            except (urllib.error.URLError, ValueError, OSError) as e:
+                last = e
+                if attempt + 1 < self.RETRIES:
+                    time.sleep(self.BACKOFF * (2 ** attempt))
+        else:
+            raise RuntimeError(
+                f"火山引擎 TTS 调用失败（重试 {self.RETRIES} 次）: {last}"
+            ) from last
 
         data = body.get("data")
         if not data:
