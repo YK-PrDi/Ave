@@ -22,8 +22,17 @@ CANVAS_W, CANVAS_H = 720, 1280
 SIZE_SCALE = 4.0
 REF_WIDTH = 1080
 
-# 「正中央偏下」：垂直位置取画面高度的 72%（剪映默认字幕位置附近）
-VERTICAL_POS = 0.72
+# 垂直位置：文本块中心距**画面底边** 12.5%（用户 2026-08-17 定）。
+# 自顶算即 1 - 0.125 = 87.5%。原值 0.72 太靠中间，会和素材自带的花字打架。
+BOTTOM_MARGIN = 0.125
+VERTICAL_POS = 1.0 - BOTTOM_MARGIN
+
+# 一块几个字。**这是「一次显示多少」不是「一行放多少」** ——
+# 26 字的长句会被切成 3~4 块先后出现，见 split_blocks()。
+# 用户 2026-08-18 定死 6~10：原来只设上限 8，「遇标点就断」造出大量
+# 3~5 字碎块（实测 213 块里 58 块 ≤5 字，如单独的「接住,」），一屏太空。
+MIN_CHARS_PER_BLOCK = 6
+MAX_CHARS_PER_BLOCK = 10
 
 # 阴影：纯黑、右下偏移
 SHADOW_COLOR = (0, 0, 0, 220)
@@ -43,6 +52,85 @@ MAX_CHARS_PER_LINE = 14
 def font_px(size_scale, canvas_w=CANVAS_W):
     """把剪映字号刻度换算成本画布的像素字号。"""
     return max(12, round(size_scale * SIZE_SCALE * canvas_w / REF_WIDTH))
+
+
+BREAKABLE = "，。！？；、,.!?;…"
+
+
+def split_blocks(text, min_chars=MIN_CHARS_PER_BLOCK,
+                 max_chars=MAX_CHARS_PER_BLOCK):
+    """把一句话切成若干「一次显示」的小块，按顺序返回。
+
+    与 wrap_text 的区别：wrap_text 是同一张 PNG 内折行（同时可见），
+    这里切出来的块**先后出现**，各自渲一张 PNG。
+    ASR 单句实测中位 26 字（4~6 秒），整句挂满全程一次看太多字。
+
+    规则（用户 2026-08-18 定）：每块字数**必须落在 6~10**，
+    在这个前提下尽量在标点处断开、标点留块末不跑到块首。
+
+    **不能用贪心**：贪心到句尾必撞死区 —— 剩 11 字时 6+5 会造 5 字块、
+    整块出又超 10，只有回头把前面的块改短才解得开。所以这里用 DP
+    对「整句的所有合法切法」求最优，代价函数只惩罚不在标点收尾。
+    """
+    text = text.strip()
+    if not text:
+        return []
+
+    n = len(text)
+    # 数学死区：n < 2*min 时切两块必有一块不足下限（11 字只能 6+5），
+    # 切不了就整块出。宁可一块 11 字（仍是单行，折行阈值 14）
+    # 也不放出 5 字碎块 —— 下限是用户这次的硬要求。
+    if n < 2 * min_chars:
+        return [text]
+
+    def cut_cost(end):
+        """在 end 处切一刀的代价：标点收尾最好，其次是标点的下一字。
+
+        词中断罚得重（30）：轻罚过实测 DP 会为了凑长度乱切，
+        断出「先看颜色和位 | 置合不合适」这种半个词。罚重之后它宁可
+        让块长在 6~10 里挪，也会去够那个标点。
+        """
+        if text[end - 1] in BREAKABLE:
+            return 0
+        if end < n and text[end] in BREAKABLE:
+            return 60     # 把标点甩到下一块块首，最差
+        return 30         # 词中间硬断
+
+    # best[i] = 把 text[i:] 切完的最小代价，nxt[i] = 第一刀切在哪
+    INF = float("inf")
+    best = [INF] * (n + 1)
+    nxt = [None] * (n + 1)
+    best[n] = 0
+    for i in range(n - 1, -1, -1):
+        rest = n - i
+        for size in range(min_chars, max_chars + 1):
+            j = i + size
+            if j > n:
+                # 收尾块：不足下限就不合法，除非整句只剩这一块（上面已排除）
+                break
+            if best[j] == INF:
+                continue
+            c = best[j] + (cut_cost(j) if j < n else 0)
+            if c < best[i]:
+                best[i] = c
+                nxt[i] = j
+        # 尾巴比下限还短（rest < min_chars）时 best[i] 保持 INF，
+        # DP 自会绕开这种切法，回头把前面的块拉长/缩短去消化它。
+        if rest < min_chars:
+            best[i] = INF
+            nxt[i] = None
+
+    if best[0] == INF:
+        # 理论上 n > max_chars 时总有解；真无解就退化成等分，别丢字。
+        step = max_chars
+        return [text[k:k + step] for k in range(0, n, step)]
+
+    blocks, i = [], 0
+    while i < n:
+        j = nxt[i]
+        blocks.append(text[i:j])
+        i = j
+    return [b.strip() for b in blocks if b.strip()]
 
 
 def wrap_text(text, max_chars=MAX_CHARS_PER_LINE):

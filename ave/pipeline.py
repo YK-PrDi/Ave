@@ -235,15 +235,32 @@ def build_one(cb, recognizer, backend, rng, work, encoder,
             # 字幕按句摆位，时间平分该片段
             n = len(res["segments"])
             for k, s in enumerate(res["segments"]):
-                png = subtitle.render_png(
-                    s["text"], os.path.join(clip_dir, f"s{i}_{k}.png"),
-                    config.FONT_PATH,
-                    sub_size if sub_size is not None else config.SUBTITLE_SIZE,
-                    shadow=config.SUBTITLE_SHADOW)
-                if png:
-                    st = timeline + (s["start"] if n > 1 else 0.0)
-                    en = timeline + (s["end"] if n > 1 else dur)
-                    subs.append((png, st, min(en, timeline + dur)))
+                st = timeline + (s["start"] if n > 1 else 0.0)
+                en = timeline + (s["end"] if n > 1 else dur)
+                en = min(en, timeline + dur)
+                # 一句再切成 ~8 字的小块先后显示（用户 2026-08-17）。
+                # ASR 单句实测中位 26 字，整句挂满全程一次看太多字。
+                # 块时长按**字数比例**分摊该句时长 —— 不等分，
+                # 否则 3 字的「接住,」和 8 字的块停留一样久。
+                blocks = subtitle.split_blocks(s["text"])
+                if not blocks:
+                    continue
+                chars = sum(len(b) for b in blocks)
+                span = max(en - st, 0.0)
+                at = st
+                for j, btext in enumerate(blocks):
+                    png = subtitle.render_png(
+                        btext, os.path.join(clip_dir, f"s{i}_{k}_{j}.png"),
+                        config.FONT_PATH,
+                        sub_size if sub_size is not None
+                        else config.SUBTITLE_SIZE,
+                        shadow=config.SUBTITLE_SHADOW)
+                    # 末块直接收到句尾，避免累加误差留下缝隙
+                    bend = en if j == len(blocks) - 1 else \
+                        at + span * len(btext) / chars
+                    if png:
+                        subs.append((png, at, bend))
+                    at = bend
         else:
             # 无口播：静音占位，不配字幕（用户 2026-08-14 决定：保留画面）
             backend_stub = tts.StubBackend(config.FFMPEG)
