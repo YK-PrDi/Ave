@@ -2,10 +2,11 @@
 
     python -m ave.launcher                                # 起服务 + 开浏览器
     python -m ave.launcher --pick-dir "标题" "初始目录"    # 弹目录选择框
+    python -m ave.launcher --pick-files "标题" "初始目录"  # 弹多选文件框
     python -m ave.launcher --no-browser                   # 只起服务
 
-`--pick-dir` 是 `server.py:pick_dir()` 的依赖，必须作为 exe 的真实子命令存在 ——
-冻结后的 exe 不接受 `python -c "<代码>"` 那种调法。
+`--pick-dir` / `--pick-files` 是 `server.py` 的依赖，必须作为 exe 的真实子命令
+存在 —— 冻结后的 exe 不接受 `python -c "<代码>"` 那种调法。
 """
 
 import os
@@ -37,6 +38,36 @@ def pick_dir(title="选择文件夹", initial=""):
         title=title, initialdir=initial or os.path.expanduser("~"))
     root.destroy()
     print(path or "")
+    return 0
+
+
+def pick_files(title="选择文件", initial="", kind="audio"):
+    """弹原生多选文件框，选中的路径逐行打到 stdout。
+
+    和 `pick_dir` 同一套理由：浏览器拿不到真实文件路径，而走 HTTP 上传
+    要引入 `python-multipart`（当前未装）。取消时不打任何行。
+
+    ⚠️ 已知边界：这条路依赖对话框弹在**服务所在的那台机器**上。
+    接入羽刃后若变成非本机访问，得改成真正的上传通道。
+    """
+    import os
+    import tkinter as tk
+    from tkinter import filedialog
+
+    types = {
+        "audio": [("音频文件", "*.mp3 *.wav *.m4a *.aac *.flac"),
+                  ("所有文件", "*.*")],
+    }.get(kind, [("所有文件", "*.*")])
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    paths = filedialog.askopenfilenames(
+        title=title, initialdir=initial or os.path.expanduser("~"),
+        filetypes=types)
+    root.destroy()
+    for p in paths or ():
+        print(p)
     return 0
 
 
@@ -150,9 +181,12 @@ def main(argv=None):
 
     if argv and argv[0] == "--pick-dir":
         return pick_dir(*argv[1:3])
+    if argv and argv[0] == "--pick-files":
+        return pick_files(*argv[1:4])
     if argv and argv[0] not in ("--no-browser",):
         print(f"未知参数: {argv[0]}\n"
-              "用法: [--no-browser] | --pick-dir [标题] [初始目录]",
+              "用法: [--no-browser] | --pick-dir [标题] [初始目录]\n"
+              "      | --pick-files [标题] [初始目录] [类型]",
               file=sys.stderr)
         return 2
     return serve(open_browser="--no-browser" not in argv)

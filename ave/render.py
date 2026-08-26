@@ -35,10 +35,11 @@ def pick_encoder(ffmpeg):
         "若报这个错说明用的是裁剪版 ffmpeg（如剪映自带那份）。")
 
 
-def build_filter(n_clips, subs, has_bgm, total_dur):
+def build_filter(n_clips, subs, has_bgm, total_dur, speed=1.0):
     """拼出 filter_complex。
 
     subs: [(png_path, start, end), ...] 已按时间排序
+    speed: 画面倍速。>1 画面加速、成品变短。
     输入顺序约定：
       [0..n-1]      视频片段
       [n]           配音（已按片段拼好的整条音轨）
@@ -47,8 +48,15 @@ def build_filter(n_clips, subs, has_bgm, total_dur):
     """
     parts = []
 
-    # 视频拼接
-    vin = "".join(f"[{i}:v]" for i in range(n_clips))
+    # 视频拼接。倍速在 concat **之前**逐路做 —— 每个片段各自压缩，
+    # 与 pipeline 侧按 dur/speed 排的时间轴逐段对齐；放 concat 之后
+    # 虽然总长一样，但依赖各段 PTS 已被正确重排，不如逐路稳。
+    if speed != 1.0:
+        for i in range(n_clips):
+            parts.append(f"[{i}:v]setpts=PTS/{speed:.6f}[sp{i}]")
+        vin = "".join(f"[sp{i}]" for i in range(n_clips))
+    else:
+        vin = "".join(f"[{i}:v]" for i in range(n_clips))
     parts.append(f"{vin}concat=n={n_clips}:v=1:a=0[vcat]")
 
     # 字幕逐张叠加，用 enable 控制显示时间窗
@@ -77,7 +85,7 @@ def build_filter(n_clips, subs, has_bgm, total_dur):
 
 
 def render(clips, voice_audio, subs, out_path, ffmpeg,
-           bgm=None, total_dur=None, encoder=None):
+           bgm=None, total_dur=None, encoder=None, speed=1.0):
     """渲染一条成品。
 
     clips:       [视频文件路径, ...] 按拼接顺序
@@ -85,6 +93,7 @@ def render(clips, voice_audio, subs, out_path, ffmpeg,
     subs:        [(png路径, 起, 止), ...]
     bgm:         BGM 文件路径，可为 None
     total_dur:   总时长，用于裁 BGM
+    speed:       画面倍速，>1 变快变短
     """
     encoder = encoder or pick_encoder(ffmpeg)
     cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]
@@ -97,7 +106,7 @@ def render(clips, voice_audio, subs, out_path, ffmpeg,
     for png, _s, _e in subs:
         cmd += ["-i", png]
 
-    fc = build_filter(len(clips), subs, bool(bgm), total_dur or 0)
+    fc = build_filter(len(clips), subs, bool(bgm), total_dur or 0, speed)
     cmd += [
         "-filter_complex", fc,
         "-map", "[vout]", "-map", "[aout]",

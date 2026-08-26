@@ -5,6 +5,8 @@ import type { ComboItem, Health, JobEvent, OutputFile, ScanStats } from './api'
 import HealthBar from './components/HealthBar.vue'
 import SourcePanel from './components/SourcePanel.vue'
 import ParamPanel from './components/ParamPanel.vue'
+import CopyPanel from './components/CopyPanel.vue'
+import BgmPanel from './components/BgmPanel.vue'
 import PreviewList from './components/PreviewList.vue'
 import RunPanel from './components/RunPanel.vue'
 import OutputList from './components/OutputList.vue'
@@ -21,6 +23,12 @@ const seed = ref<number | null>(null)
 const limit = ref(0)
 // 默认开：实测关掉后 30.8/39 条会出现同主题重复
 const dedup = ref(true)
+// 画面倍速。默认 1.2（用户 2026-08-26 定），1.0 = 原速
+const speed = ref(1.2)
+// 给无口播分镜用 AI 补口播文案。默认开
+const aiCopy = ref(true)
+// 生成文案任务在跑时，别让人同时点渲染（后端只允许一个 job）
+const copyBusy = ref(false)
 
 const combos = ref<ComboItem[]>([])
 const themeNote = ref('')
@@ -37,6 +45,25 @@ let unsubscribe: (() => void) | null = null
 const outputs = ref<OutputFile[]>([])
 const outputsDir = ref('')
 const loadingOutputs = ref(false)
+
+// 视觉后端状态。从 /api/copy/list 拿（那个接口只读缓存，不发外部请求），
+// 用来决定 ParamPanel 的开关要不要提示「Key 没配」。
+const visionBackend = ref('stub')
+const visionModel = ref('')
+
+async function refreshHealth() {
+  health.value = await api.health().catch(() => health.value)
+}
+
+async function loadVisionState() {
+  try {
+    const r = await api.copyList(source.value || undefined)
+    visionBackend.value = r.vision_backend
+    visionModel.value = r.vision_model
+  } catch {
+    // 素材目录不可用时不该拦住整个界面，保持默认值
+  }
+}
 
 async function loadOutputs() {
   loadingOutputs.value = true
@@ -61,6 +88,8 @@ function params() {
     limit: limit.value || 0,
     out_dir: outDir.value || undefined,
     dedup: dedup.value,
+    speed: speed.value,
+    ai_copy: aiCopy.value,
   }
 }
 
@@ -95,8 +124,10 @@ onMounted(async () => {
     points.value = h.defaults.points
     hookLimit.value = h.defaults.hook_limit
     subSize.value = h.defaults.sub_size
+    speed.value = h.defaults.speed
     await doScan()
     await loadOutputs()
+    await loadVisionState()
   } catch (e) {
     error.value = `连不上后端服务，请先运行 python -m ave.server（${e}）`
   }
@@ -152,7 +183,7 @@ async function start() {
         running.value = false
         unsubscribe = null
         // 跑完刷新环境状态（BGM 可能中途放进去了）
-        health.value = await api.health().catch(() => health.value)
+        await refreshHealth()
         await loadOutputs()
       },
     )
@@ -205,9 +236,22 @@ onUnmounted(() => unsubscribe?.())
       v-model:seed="seed"
       v-model:limit="limit"
       v-model:dedup="dedup"
+      v-model:speed="speed"
+      v-model:ai-copy="aiCopy"
       :theme-note="themeNote"
       :stats="stats"
+      :vision-backend="visionBackend"
     />
+
+    <CopyPanel
+      :source="source"
+      :vision-backend="visionBackend"
+      :vision-model="visionModel"
+      :busy="running"
+      @busy="copyBusy = $event"
+    />
+
+    <BgmPanel @changed="refreshHealth" />
 
     <PreviewList
       :combos="combos"
@@ -217,7 +261,7 @@ onUnmounted(() => unsubscribe?.())
 
     <RunPanel
       v-model:out-dir="outDir"
-      :running="running"
+      :running="running || copyBusy"
       :events="events"
       :error="error"
       :picking="picking"

@@ -21,6 +21,7 @@
 | `combo.py` | 分镜解析 + 排列组合抽样 | — | 任何 IO、ffmpeg 调用、网络请求 |
 | `ave/config.py` | 配置与路径集中处，凭证填这里 | — | 业务逻辑 |
 | `ave/asr.py` | 语音识别 + 缓存 + 幻觉闸门 | — | 删闸门、动 `SPEECH_RATIO` 阈值 |
+| `ave/vision.py` | 抽帧 + 视觉模型写口播（给无口播分镜） | — | 在这里管缓存（缓存归 `pipeline.CopyStore`） |
 | `ave/subtitle.py` | Pillow 渲字幕 PNG | — | 改用 ffmpeg drawtext |
 | `ave/tts.py` | 配音合成 + 时长贴合 | — | 用慢放代替补静音 |
 | `ave/render.py` | ffmpeg 拼接 / 叠字幕 / 混音 | — | `apad=whole_dur` |
@@ -61,6 +62,16 @@
    重新归一，得到的**入选概率不与权重成正比** —— 实测单成员主题仍有 11 次曝光，
    期望只有 5.9【实测】。必须直接把入选概率定成 ∝ 成员数（超 1 截顶）再用
    Madow 系统抽样实现，见 `combo.py:inclusion_probs()`。
+12. **倍速改时间轴，不准渲完再整体变速**。语义是「画面加速 → 成品变短」：
+   `build_one()` 用 `eff = dur / speed` 作为时间轴基准（TTS 目标时长、字幕窗口、
+   `timeline +=` 全用它），渲染侧每路视频 `setpts=PTS/speed` **在 concat 之前**逐路做。
+   事后整体变速会同时拉高音调；放 concat 之后则依赖各段 PTS 已被正确重排。
+   **ASR 时间戳要同比压缩**（`s['start']/speed`）—— 那是原速下测的，不除会错位。
+13. **AI 补的口播文案不准覆盖人工修改**。`CopyStore` 的 `source` 字段区分
+   `'ai'` / `'edited'`，`edited` 的即使 `force=True` 也不重生成 —— 否则用户改完一批，
+   下次跑全量就被模型悄悄冲掉。要丢弃得在界面上清空那条。
+   接入点只有 `build_one()` 里那个**单段伪 segment**
+   （`[{'start':0,'end':eff,'text':...}]`），构造好后下游切块/分摊时长/渲 PNG 一行不用改。
 
 ## 改动分级
 

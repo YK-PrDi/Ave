@@ -9,8 +9,11 @@ const props = defineProps<{
   seed: number | null
   limit: number
   dedup: boolean
+  speed: number
+  aiCopy: boolean
   themeNote: string
   stats: ScanStats | null
+  visionBackend: string
 }>()
 
 const emit = defineEmits<{
@@ -20,6 +23,8 @@ const emit = defineEmits<{
   'update:seed': [number | null]
   'update:limit': [number]
   'update:dedup': [boolean]
+  'update:speed': [number]
+  'update:aiCopy': [boolean]
 }>()
 
 // 产量随参数实时变，让人调参时能立刻看到影响
@@ -33,6 +38,9 @@ const expected = computed(() => {
 const pointsTooMany = computed(
   () => !!props.stats && props.points > props.stats.groups.points,
 )
+
+// 倍速超出这个范围画面/语速都会明显失真，提前拦
+const speedBad = computed(() => props.speed < 0.5 || props.speed > 2)
 </script>
 
 <template>
@@ -58,6 +66,16 @@ const pointsTooMany = computed(
           @input="emit('update:hookLimit', +($event.target as HTMLInputElement).value)"
         />
         <em>决定产量</em>
+      </label>
+
+      <label>
+        <span>画面倍速</span>
+        <input
+          type="number" min="0.5" max="2" step="0.1" :value="props.speed"
+          @input="emit('update:speed', +($event.target as HTMLInputElement).value)"
+        />
+        <em v-if="speedBad" class="bad">只支持 0.5–2.0</em>
+        <em v-else>1.0 = 原速，越大成品越短</em>
       </label>
 
       <label>
@@ -108,6 +126,23 @@ const pointsTooMany = computed(
           关掉则纯随机，接受重复。
         </i>
         <i v-if="props.themeNote" class="note">{{ props.themeNote }}</i>
+      </span>
+    </label>
+
+    <label class="toggle">
+      <input
+        type="checkbox" :checked="props.aiCopy"
+        @change="emit('update:aiCopy', ($event.target as HTMLInputElement).checked)"
+      />
+      <span>
+        <b>AI 补口播文案</b>
+        <i>
+          本身没有口播的分镜，让 AI 看画面写一段口播，再配音加字幕。
+          关掉则这些片段只保留画面、不配音不加字幕。
+        </i>
+        <i v-if="props.aiCopy && props.visionBackend === 'stub'" class="warn">
+          未配置方舟 API Key，这个开关暂时不生效 —— 无口播片段仍只保留画面。
+        </i>
       </span>
     </label>
   </section>
@@ -191,5 +226,8 @@ label em.bad {
 }
 .toggle i.note {
   color: #7f9ab8;
+}
+.toggle i.warn {
+  color: #ffd98c;
 }
 </style>

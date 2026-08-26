@@ -30,7 +30,10 @@ function issues(h: Health) {
     </template>
     <span v-else class="pill ok">环境就绪</span>
     <span class="spacer" />
-    <span class="muted">BGM {{ props.health.bgm_count }} 首</span>
+    <span class="muted">
+      BGM {{ props.health.bgm_count }} 首（内置
+      {{ props.health.bgm.builtin }} · 自定义 {{ props.health.bgm.custom }}）
+    </span>
   </div>
 </template>
 

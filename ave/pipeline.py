@@ -17,7 +17,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import combo  # noqa: E402
-from ave import asr, config, render, subtitle, tts  # noqa: E402
+from ave import asr, config, render, subtitle, tts, vision  # noqa: E402
 
 
 def build_theme_map(pools, dedup=True):
@@ -28,11 +28,15 @@ def build_theme_map(pools, dedup=True):
     """
     if not dedup:
         return {}, "已关闭语义去重，同一条里可能出现多个卖点讲同一件事"
-    texts, from_asr = point_texts(pools)
+    texts, from_asr, from_ai = point_texts(pools)
     tm = combo.auto_cluster(texts)
     n = len(set(tm.values()))
+    fallback = len(texts) - from_asr - from_ai
     note = (f"语义聚类：{len(texts)} 个卖点组 → {n} 个主题"
-            f"（{from_asr} 组用 ASR 原文，{len(texts) - from_asr} 组回落用标签）")
+            f"（{from_asr} 组用 ASR 原文")
+    if from_ai:
+        note += f"，{from_ai} 组用 AI 文案"
+    note += f"，{fallback} 组回落用标签）"
     return tm, note
 
 
@@ -52,14 +56,11 @@ def make_tts_backend():
 
 
 def pick_bgm(rng, bgm_dir=None):
-    """从 BGM 目录随机挑一首。目录不存在或为空则返回 None。"""
-    bgm_dir = bgm_dir or config.BGM_DIR
-    if not os.path.isdir(bgm_dir):
-        return None
-    tracks = [os.path.join(bgm_dir, f)
-              for f in sorted(os.listdir(bgm_dir))
-              if os.path.splitext(f)[1].lower() in
-              (".mp3", ".wav", ".m4a", ".aac", ".flac")]
+    """从 BGM 两层（内置 + 自定义）合并的候选池里随机挑一首。
+
+    两层都空则返回 None。bgm_dir 传了就覆盖自定义层，语义与旧签名兼容。
+    """
+    tracks = [p for p, _tag in config.list_bgm(bgm_dir)]
     return rng.choice(tracks) if tracks else None
 
 
@@ -138,8 +139,101 @@ def prune_manifest(out_dir, filename):
     os.replace(tmp, p)
 
 
-def warm_point_asr(pools, recognizer, work, on_event=None, should_stop=None):
+# ---------------- AI 口播文案 ----------------
+
+
+class CopyStore:
+    """AI 写的口播文案缓存。放这里是因为 pipeline 和 server 都要用。
+
+    键复用 `asr._cache_key()`（路径 + mtime + 大小）—— 与 ASR 缓存同一套，
+    素材换了自动失效，不另造一套键。
+
+    值 `{'text','source','role','label','at'}`。`source` 是关键：
+      'ai'      模型生成的，重新生成会覆盖
+      'edited'  人工改过的，**除非显式 force 否则不覆盖** ——
+                否则用户改完一批，下次跑全量就被模型悄悄冲掉了
+    """
+
+    def __init__(self, path=None):
+        self.path = path or config.COPY_CACHE
+        self._data = self._load()
+
+    def _load(self):
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        items = d.get("items")
+        return items if isinstance(items, dict) else {}
+
+    def save(self):
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        tmp = self.path + ".tmp"
+        # 临时文件 + 原子替换，与 record_manifest() 同形：
+        # 中途崩掉不会留下半截 JSON 把缓存读废
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "items": self._data}, f,
+                      ensure_ascii=False, indent=1)
+        os.replace(tmp, self.path)
+
+    @staticmethod
+    def key(path):
+        return asr._cache_key(path)
+
+    def get(self, path):
+        """返回该片段的记录，没有则 None。"""
+        try:
+            return self._data.get(self.key(path))
+        except OSError:
+            return None
+
+    def text(self, path):
+        r = self.get(path) or {}
+        return (r.get("text") or "").strip()
+
+    def put(self, path, text, source="ai", role="", label=""):
+        self._data[self.key(path)] = {
+            "text": text, "source": source, "role": role, "label": label,
+            "at": int(time.time()),
+        }
+
+    def make(self, clip, duration, backend, force=False):
+        """取或生成一个片段的文案。返回 (文本, 是否新生成)。
+
+        人工改过的（source='edited'）不重生成，除非 force。
+        """
+        cur = self.get(clip.path)
+        if cur and not force:
+            return (cur.get("text") or "").strip(), False
+        if cur and cur.get("source") == "edited" and force:
+            # force 也不覆盖人工修改 —— force 的意思是「重跑模型」，
+            # 不是「丢掉我改的东西」。要丢得先在界面上清空那条。
+            return (cur.get("text") or "").strip(), False
+
+        frames = vision.extract_frames(
+            clip.path, os.path.join(config.WORK_DIR, "frames"),
+            config.FFMPEG, dur=None)
+        txt = backend.write_copy(
+            frames, role=clip.role, desc=clip.desc,
+            max_chars=vision.max_chars_for(duration))
+        for f in frames:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        if not txt:
+            return "", False
+        self.put(clip.path, txt, source="ai", role=clip.role,
+                 label=clip.label)
+        self.save()
+        return txt, True
+
+
+def warm_point_text(pools, recognizer, work, copy_store=None,
+                    vision_backend=None, on_event=None, should_stop=None):
     """先识别每个卖点变体组的代表片段，让语义聚类能读到 ASR 原文。
+    顺带给无口播的那几个补上 AI 文案，让它们也有真实文本可聚类。
 
     为什么需要：`build_theme_map()` 跑在 `run()` 开头，**早于任何识别**，
     而 `point_texts()` 只读缓存。全新安装的 exe 用户目录里没缓存，
@@ -148,41 +242,51 @@ def warm_point_asr(pools, recognizer, work, on_event=None, should_stop=None):
 
     **不增加识别总量**：这些片段本来在渲染时也要识别一遍，
     这里只是把时间点提前。缓存命中直接返回（见 `asr.Recognizer.recognize`）。
+    AI 文案同理，渲染时也要生成，且同样有缓存。
 
-    返回 (已识别数, 出声的组数)。
+    返回 (已识别数, 出声的组数, 补了文案的组数)。
     """
     groups = combo.group_variants(pools.points)
     reps = [g[0] for g in groups]
     total = len(reps)
-    done = voiced = 0
+    done = voiced = made = 0
     for i, c in enumerate(reps, 1):
         if should_stop and should_stop():
             break
+        err = None
         try:
             res = recognizer.recognize(c.path, work)
             if res.get("segments"):
                 voiced += 1
+            elif copy_store is not None and vision_backend is not None:
+                # 无口播的才生成。33 组里实测只有 2 组，几次 API 调用。
+                dur = tts.probe_duration(c.path, config.FFMPEG)
+                if dur > 0:
+                    txt, _fresh = copy_store.make(
+                        c, dur / config.PLAYBACK_SPEED, vision_backend)
+                    if txt:
+                        made += 1
             done += 1
         except (RuntimeError, OSError) as e:
-            # 单个片段识别失败不该拖垮整批 —— 聚类会回落用它的标签
-            if on_event:
-                on_event({"type": "prewarm", "done": i, "total": total,
-                          "file": c.name, "error": str(e)[:200]})
-            continue
+            # 单个片段失败不该拖垮整批 —— 聚类会回落用它的标签
+            err = str(e)[:200]
+        ev = {"type": "prewarm", "done": i, "total": total, "file": c.name}
+        if err:
+            ev["error"] = err
         if on_event:
-            on_event({"type": "prewarm", "done": i, "total": total,
-                      "file": c.name})
-    return done, voiced
+            on_event(ev)
+    return done, voiced, made
 
 
 def point_texts(pools):
     """每个卖点变体组的代表文本，用于语义聚类。
 
-    优先用 ASR 缓存里的口播原文 —— 那是观众真正听到的内容，
-    文件名标签只是人写的概括，可能有偏差。缓存里没有（还没识别过、
-    或被幻觉闸门判为无口播）就回落用标签的内容概括。
+    取文本顺序：**ASR 原文 → AI 口播文案 → 文件名标签**。
+    ASR 原文是观众真正听到的内容，最优先；无口播片段现在有 AI 文案，
+    那也是成品里真会念出来的内容，比人写的文件名概括更贴近实际
+    （用户 2026-08-26 定：AI 文案参与聚类）；两者都没有才回落用标签。
 
-    读缓存而不现场识别：识别 33 个片段要几十秒，而 `--limit 2` 这种
+    读缓存而不现场识别/生成：识别 33 个片段要几十秒，而 `--limit 2` 这种
     快速验证只需要几秒。缓存跑满后自动切到原文，聚类质量随之提升。
     """
     cache = {}
@@ -192,8 +296,9 @@ def point_texts(pools):
                 cache = json.load(f)
         except (OSError, ValueError):
             cache = {}
+    copies = CopyStore()
 
-    texts, from_asr = {}, 0
+    texts, from_asr, from_ai = {}, 0, 0
     for g in combo.group_variants(pools.points):
         c = g[0]
         t = ""
@@ -204,14 +309,20 @@ def point_texts(pools):
             pass
         if t:
             from_asr += 1
+        else:
+            t = copies.text(c.path)
+            if t:
+                from_ai += 1
         texts[c.label] = t or c.desc
-    return texts, from_asr
+    return texts, from_asr, from_ai
 
 
 def build_one(cb, recognizer, backend, rng, work, encoder,
-              out_dir=None, bgm_dir=None, sub_size=None):
+              out_dir=None, bgm_dir=None, sub_size=None, speed=None,
+              copy_store=None, vision_backend=None):
     """渲染一条成品。返回 (输出路径, 提示列表)。"""
     notes = []
+    speed = speed or config.PLAYBACK_SPEED
     clip_dir = os.path.join(work, f"c{cb.index:03d}")
     os.makedirs(clip_dir, exist_ok=True)
 
@@ -221,23 +332,45 @@ def build_one(cb, recognizer, backend, rng, work, encoder,
         dur = tts.probe_duration(clip.path, config.FFMPEG)
         if dur <= 0:
             raise RuntimeError(f"无法读取时长: {clip.path}")
+        # 倍速后的有效时长。时间轴、配音目标、字幕窗口全部按这个排 ——
+        # 原始 dur 只用来算它。画面侧由 render 的 setpts 同步压缩。
+        eff = dur / speed
 
         res = recognizer.recognize(clip.path, work)
-        text = " ".join(s["text"] for s in res["segments"]).strip()
+        segments = res["segments"]
+        text = " ".join(s["text"] for s in segments).strip()
+
+        # 无口播且开了 AI 补文案：让模型看画面写一段，走同一条 TTS + 字幕链路。
+        # 构造**单段伪 segment** 后下游一行不用改 —— n==1 的分支本来就是
+        # 「起点 timeline、终点 timeline+eff」，切块/分摊时长/渲 PNG 全照常。
+        if not text and copy_store is not None and vision_backend is not None:
+            try:
+                ai_text, fresh = copy_store.make(clip, eff, vision_backend)
+            except (RuntimeError, OSError) as e:
+                # 单个片段生成失败不该拖垮整批，回落静音占位
+                ai_text, fresh = "", False
+                notes.append(f"{clip.name}: AI 文案生成失败（{str(e)[:120]}）")
+            if ai_text:
+                text = ai_text
+                segments = [{"start": 0.0, "end": eff, "text": ai_text}]
+                src = "新生成" if fresh else "取自缓存"
+                notes.append(f"{clip.name}: 无口播，已用 AI 文案配音（{src}）")
 
         vpath = os.path.join(clip_dir, f"v{i}.mp3")
         if text:
             # 有口播：TTS 合成并贴合画面时长
-            v = tts.synth_fit(backend, text, dur, vpath, config.FFMPEG,
+            v = tts.synth_fit(backend, text, eff, vpath, config.FFMPEG,
                               clip_dir)
             if v.note:
                 notes.append(f"{clip.name}: {v.note}")
             # 字幕按句摆位，时间平分该片段
-            n = len(res["segments"])
-            for k, s in enumerate(res["segments"]):
-                st = timeline + (s["start"] if n > 1 else 0.0)
-                en = timeline + (s["end"] if n > 1 else dur)
-                en = min(en, timeline + dur)
+            n = len(segments)
+            for k, s in enumerate(segments):
+                # ASR 时间戳是原速的，倍速后要同比压缩才对得上画面。
+                # AI 文案那条是单段伪 segment，走 n==1 分支不受影响。
+                st = timeline + (s["start"] / speed if n > 1 else 0.0)
+                en = timeline + (s["end"] / speed if n > 1 else eff)
+                en = min(en, timeline + eff)
                 # 一句再切成 ~8 字的小块先后显示（用户 2026-08-17）。
                 # ASR 单句实测中位 26 字，整句挂满全程一次看太多字。
                 # 块时长按**字数比例**分摊该句时长 —— 不等分，
@@ -264,31 +397,31 @@ def build_one(cb, recognizer, backend, rng, work, encoder,
         else:
             # 无口播：静音占位，不配字幕（用户 2026-08-14 决定：保留画面）
             backend_stub = tts.StubBackend(config.FFMPEG)
-            backend_stub.synth("", vpath, target=dur)
+            backend_stub.synth("", vpath, target=eff)
             if res["note"]:
                 notes.append(f"{clip.name}: {res['note']}")
 
         voice_parts.append(vpath)
-        timeline += dur
+        timeline += eff
 
     voice = render.concat_audio(voice_parts,
                                os.path.join(clip_dir, "voice.mp3"),
                                config.FFMPEG)
     bgm = pick_bgm(rng, bgm_dir)
     if bgm is None:
-        notes.append("无 BGM（bgm 目录为空，见 docs/资源需求清单.md）")
+        notes.append("无 BGM（两层 bgm 目录都为空，见 docs/资源需求清单.md）")
 
     out_dir = out_dir or config.OUTPUT_DIR
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, f"混剪_{cb.index:03d}.mp4")
     render.render([c.path for c in cb.clips], voice, subs, out, config.FFMPEG,
-                  bgm=bgm, total_dur=timeline, encoder=encoder)
+                  bgm=bgm, total_dur=timeline, encoder=encoder, speed=speed)
     return out, notes
 
 
 def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
-        out_dir=None, bgm_dir=None, sub_size=None, dedup=True,
-        on_event=None, should_stop=None):
+        out_dir=None, bgm_dir=None, sub_size=None, dedup=True, speed=None,
+        ai_copy=None, on_event=None, should_stop=None):
     """跑一批混剪。命令行和 HTTP 层都走这里。
 
     on_event(dict)  —— 进度回调。事件形如
@@ -299,6 +432,8 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
         if on_event:
             on_event(ev)
 
+    speed = speed or config.PLAYBACK_SPEED
+    ai_copy = config.AI_COPY if ai_copy is None else ai_copy
     pools, stats = scan(source)
 
     # recognizer 提到聚类之前 —— 聚类要读 ASR 原文，得先有原文。
@@ -308,15 +443,20 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
                                 config.ASR_CACHE)
     os.makedirs(config.WORK_DIR, exist_ok=True)
 
+    copy_store = CopyStore() if ai_copy else None
+    vision_backend = vision.make_backend() if ai_copy else None
+
     # 预热只在「全量 + 开去重」时做。
     # 限量跑不预热：`--limit 2` 现在几秒出片，冷缓存下预热 33 个片段要两分钟，
     # 会毁掉这条快速验证路径（CLAUDE.md 要求改 Python 必须跑 --limit 2）。
     warm_note = ""
     if dedup and not limit:
-        n, voiced = warm_point_asr(pools, recognizer, config.WORK_DIR,
-                                   on_event=on_event,
-                                   should_stop=should_stop)
-        warm_note = f"；已预热 {n} 个卖点代表片段（{voiced} 个有口播）"
+        n, voiced, made = warm_point_text(
+            pools, recognizer, config.WORK_DIR,
+            copy_store=copy_store, vision_backend=vision_backend,
+            on_event=on_event, should_stop=should_stop)
+        warm_note = f"；已预热 {n} 个卖点代表片段（{voiced} 个有口播"
+        warm_note += f"，{made} 个补了 AI 文案）" if made else "）"
         # 预热要两分钟，中途停止得当场收手，不能接着渲一整批
         if should_stop and should_stop():
             emit(type="stopped", done=0, total=0)
@@ -340,7 +480,9 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
     out_dir = out_dir or config.OUTPUT_DIR
     emit(type="start", total=len(combos), encoder=encoder,
          backend=config.TTS_BACKEND, out_dir=out_dir, stats=stats,
-         dedup=dedup, theme_note=theme_note)
+         dedup=dedup, theme_note=theme_note, speed=speed,
+         ai_copy=ai_copy,
+         vision_backend=vision_backend.name if vision_backend else "off")
 
     backend = make_tts_backend()
     rng = random.Random(seed)
@@ -356,7 +498,9 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
             out, notes = build_one(cb, recognizer, backend, rng,
                                    config.WORK_DIR, encoder,
                                    out_dir=out_dir, bgm_dir=bgm_dir,
-                                   sub_size=sub_size)
+                                   sub_size=sub_size, speed=speed,
+                                   copy_store=copy_store,
+                                   vision_backend=vision_backend)
             record_manifest(out_dir, os.path.basename(out), cb, seed)
             ok += 1
             all_notes.extend(notes)
@@ -381,18 +525,29 @@ def main():
     # Windows 控制台/管道默认 GBK，编不了 ⚠ ✓ ✗ 这些字符，
     # 输出重定向到文件时会直接 UnicodeEncodeError 崩掉【实测】。
     # errors='replace' 兜底：字体缺字最多显示成 ?，不会中断渲染。
+    #
+    # line_buffering=True：不加的话输出重定向到文件时 Python 块缓冲，
+    # 全量跑（40 分钟）的日志会长时间是 0 字节，看起来像卡死
+    # 【实测 2026-08-26 全量跑时被骗过一次，只能靠数输出目录的成品才确认在跑】。
+    # 双击 exe 走真实控制台不受影响（tty 自动行缓冲）。
+    # `launcher.py` 早就加了这个参数，这里当初漏了。
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
+            stream.reconfigure(encoding="utf-8", errors="replace",
+                               line_buffering=True)
 
     ap = argparse.ArgumentParser(description="分镜自动化混剪")
     ap.add_argument("--source", default=config.SOURCE_DIR, help="分镜根目录")
     ap.add_argument("--points", type=int, default=config.POINT_COUNT,
                     help="每条用几个卖点")
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 条")
+    ap.add_argument("--speed", type=float, default=config.PLAYBACK_SPEED,
+                    help="画面倍速，1.0 = 原速（默认 %(default)s）")
     ap.add_argument("--seed", type=int, default=None, help="固定随机种子")
     ap.add_argument("--no-dedup", action="store_true",
                     help="关闭卖点语义去重，接受同一条里出现近义卖点")
+    ap.add_argument("--no-ai-copy", action="store_true",
+                    help="关闭 AI 补口播文案，无口播片段回落静音占位")
     ap.add_argument("--dry-run", action="store_true", help="只看组合不渲染")
     args = ap.parse_args()
 
@@ -422,9 +577,17 @@ def main():
             print(f"组合方案: {ev['total']} 条\n")
             print(ev["theme_note"])
             print(f"编码器: {ev['encoder']}")
+            print(f"画面倍速: {ev['speed']}x"
+                  + ("（原速）" if ev["speed"] == 1.0 else ""))
             print(f"配音后端: {ev['backend']}"
                   + ("  ⚠ 静音占位，等火山引擎凭证"
                      if ev["backend"] == "stub" else ""))
+            if not ev["ai_copy"]:
+                print("AI 补口播: 已关闭")
+            elif ev["vision_backend"] == "stub":
+                print("AI 补口播: ⚠ 未配置 ARK_API_KEY，无口播片段仍走静音占位")
+            else:
+                print(f"AI 补口播: {ev['vision_backend']}")
             print(f"输出目录: {ev['out_dir']}\n")
         elif t == "item":
             if ev["ok"]:
@@ -435,7 +598,8 @@ def main():
                       f"{ev['error'][:120]}")
 
     r = run(source=args.source, points=args.points, limit=args.limit,
-            seed=args.seed, dedup=not args.no_dedup, on_event=on_event)
+            seed=args.seed, dedup=not args.no_dedup, speed=args.speed,
+            ai_copy=not args.no_ai_copy, on_event=on_event)
 
     print(f"\n完成 {r['ok']}/{r['total']} 条，用时 {r['seconds']:.0f}s")
     print(f"输出: {r['out_dir']}")

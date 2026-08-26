@@ -7,9 +7,48 @@ export interface Health {
   tts_backend: string
   tts_ready: boolean
   bgm_count: number
+  // BGM 分两层：内置随应用更新，自定义在用户数据目录（各公司自己加）
+  bgm: {
+    builtin: number
+    custom: number
+    builtin_dir: string
+    custom_dir: string
+  }
   source_dir: string
   output_dir: string
-  defaults: { points: number; hook_limit: number; sub_size: number }
+  defaults: {
+    points: number
+    hook_limit: number
+    sub_size: number
+    speed: number
+  }
+}
+
+export interface BgmTrack {
+  name: string
+  source: 'builtin' | 'custom'
+  size_mb: number
+}
+
+// 一个片段的口播状态与 AI 文案
+export interface CopyItem {
+  path: string
+  name: string
+  role: string
+  label: string
+  // true 有口播 / false 已识别但无口播 / null 还没识别过（状态未知，不猜）
+  asr: boolean | null
+  speech_ratio: number | null
+  copy: string
+  // 'ai' 模型生成 / 'edited' 人工改过（重新生成不覆盖）/ '' 无
+  copy_source: string
+}
+
+export interface CopyList {
+  source: string
+  vision_backend: string
+  vision_model: string
+  items: CopyItem[]
 }
 
 export interface ScanStats {
@@ -48,6 +87,10 @@ export interface JobParams {
   bgm_dir?: string
   sub_size?: number
   dedup?: boolean
+  // 画面倍速。1.0 = 原速
+  speed?: number
+  // 给无口播片段用 AI 补口播文案
+  ai_copy?: boolean
 }
 
 // 渲染进度事件。type 决定其余字段是否存在。
@@ -70,6 +113,14 @@ export interface JobEvent {
   notes?: string[]
   error?: string
   failed?: { index: number; error: string }[]
+  speed?: number
+  ai_copy?: boolean
+  vision_backend?: string
+  // 批量生成文案任务用（kind='copy'）
+  action?: string
+  copy?: string
+  made?: number
+  skipped?: number
 }
 
 // 渲染时落盘的真实构成。后端从 .ave-manifest.json 读出来一并返回。
@@ -138,6 +189,37 @@ export const api = {
     post<{ ok: boolean }>(
       '/open-output' + (outDir ? `?out_dir=${encodeURIComponent(outDir)}` : ''),
     ),
+
+  // ---- BGM 两层管理 ----
+  bgm: () =>
+    get<{ builtin_dir: string; custom_dir: string; tracks: BgmTrack[] }>('/bgm'),
+  // 弹系统文件框选音频（浏览器拿不到真实路径，必须走后端）
+  bgmAdd: () =>
+    post<{ added: string[]; skipped: { name: string; why: string }[] }>(
+      '/bgm/add',
+    ),
+  bgmDelete: (name: string) =>
+    post<{ ok: boolean }>(`/bgm/delete?name=${encodeURIComponent(name)}`),
+
+  // ---- AI 口播文案 ----
+  copyList: (source?: string) => post<CopyList>('/copy/list', { source }),
+  copySave: (path: string, text: string, source?: string) =>
+    post<{ ok: boolean; text: string; copy_source: string }>('/copy/save', {
+      path,
+      text,
+      source,
+    }),
+  copyGenerate: (source?: string) =>
+    post<{ id: string }>('/copy/generate', { source }),
+  visionTest: (source?: string) =>
+    post<{
+      ok: boolean
+      backend: string
+      model?: string
+      reply?: string
+      error?: string
+      with_image?: boolean
+    }>('/vision/test', { source }),
 
   // SSE 订阅渲染进度。返回取消函数。
   subscribe(id: string, onEvent: (e: JobEvent) => void, onEnd: () => void) {

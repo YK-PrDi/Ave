@@ -190,16 +190,70 @@ MODEL_DIR = _first_usable_model(
      os.path.join(_ROOT, "models", MODEL_NAME)],
     os.path.join(_USER_DIR, "models", MODEL_NAME))
 
-# BGM 目录。运营把买好授权的轻快 BGM 放进来（见 docs/资源需求清单.md）
+# BGM 分两层（用户 2026-08-26 定，为接入羽刃做准备）：
+#   内置层  应用目录 `bgm/`（打包落 `_internal/bgm`）—— 我们维护，随应用更新替换
+#   自定义层 用户数据目录 `bgm/` —— 各公司业务人员自己加，更新应用不碰
+# 抽 BGM 时两层合并成一个候选池，随机挑一首。只有自定义层可增删。
+# `BGM_DIR` 仍指自定义层，保持既有引用（health/JobReq.bgm_dir）语义不变。
+BGM_BUILTIN_DIR = _resource("bgm")
 BGM_DIR = _first_existing(
     [os.path.join(_USER_DIR, "bgm"), os.path.join(_ROOT, "bgm")],
     os.path.join(_USER_DIR, "bgm"))
+
+# 认作 BGM 的扩展名。原先散在 pipeline 和 server 两处各写一遍，收拢到这里。
+BGM_EXTS = (".mp3", ".wav", ".m4a", ".aac", ".flac")
+
+
+def bgm_layers(custom=None):
+    """BGM 两层，返回 [(绝对路径, 'builtin'|'custom'), ...]。
+
+    custom 传了就覆盖自定义层。
+
+    去重且标签不错位：源码态两层可能解析到同一路径（没建用户目录时
+    `BGM_DIR` 会回落到应用目录），不去重那批曲子会被算两遍、抽中概率翻倍。
+    撞上时保留 `builtin` —— 宁可让界面拒绝删除，也不能把随包授权的曲子
+    当成用户自己加的删掉。
+    """
+    layers, seen = [], set()
+    for d, tag in ((BGM_BUILTIN_DIR, "builtin"), (custom or BGM_DIR, "custom")):
+        p = os.path.realpath(d)
+        if p in seen:
+            continue
+        seen.add(p)
+        layers.append((p, tag))
+    return layers
+
+
+def bgm_dirs(custom=None):
+    """只要目录列表时用这个。"""
+    return [d for d, _tag in bgm_layers(custom)]
+
+
+def list_bgm(custom=None):
+    """列出两层里的 BGM 文件，返回 [(路径, 'builtin'|'custom'), ...]。"""
+    tracks = []
+    for d, tag in bgm_layers(custom):
+        if not os.path.isdir(d):
+            continue
+        for f in sorted(os.listdir(d)):
+            if os.path.splitext(f)[1].lower() in BGM_EXTS:
+                tracks.append((os.path.join(d, f), tag))
+    return tracks
 
 # ---------------- 组合规则 ----------------
 
 POINT_COUNT = 5      # 每条成品用几个卖点
 HOOK_USE_LIMIT = 3   # 每个钩子用满几次即废弃
 RANDOM_SEED = None   # 固定成整数可复现同一批组合
+
+# ---------------- 播放倍速 ----------------
+
+# 画面倍速（用户 2026-08-26 定 1.2，界面可调）。
+# 语义是**画面加速、成品变短**：33s 的成品变 27s。
+# 口播本来就是按画面时长合成的，所以画面变短，配音自动说得更紧 ——
+# 不是渲完再整体变速（那会同时拉高音调）。
+# 时间轴基准在 pipeline 侧换成 dur/speed，渲染侧逐路 setpts=PTS/speed。
+PLAYBACK_SPEED = 1.2
 
 # ---------------- 字幕样式 ----------------
 
@@ -267,3 +321,61 @@ def _tts_backend():
 
 
 TTS_BACKEND = _tts_backend()
+
+# ---------------- 视觉理解（给无口播片段写口播文案） ----------------
+#
+# ⚠️ **这是独立于 TTS 的另一套凭证**。TTS 那三项（appid / token / 音色）
+# 不能用于视觉模型，方舟走 API Key 鉴权。同样放 credentials.json：
+#
+#     %LOCALAPPDATA%\Ave\credentials.json
+#     { "ARK_API_KEY": "...", "ARK_VISION_MODEL": "doubao-seed-2-0-mini-260428" }
+#
+# `ARK_VISION_MODEL` 可省，省则用下面的默认值。开通步骤见
+# docs/资源需求清单.md。环境变量 AVE_ARK_API_KEY / AVE_ARK_VISION_MODEL 优先。
+#
+# 模型 ID 会随方舟上线新版本变动，所以做成可配 —— 界面的
+# 「测试视觉接口」按钮会把方舟的错误原文显示出来，改这里不用改代码。
+#
+# **默认选 `doubao-seed-evolving`**（2026-08-26 实探后定：本账号已开通且实测出文案）。
+#   ⚠️ 它是**滚动别名** —— 实测解析到 `doubao-seed-evolving-latest-version`，
+#   方舟会持续换后面那个真实版本。好处是不用跟着改，坏处是效果可能悄悄漂移，
+#   文案质量突然变化时先怀疑这里。
+#
+# ⚠️ **换模型前先确认账号开通了**。实探 23 个 ID，在售的 `doubao-seed-2-*`
+#   全部返回 `ModelNotOpen`（ID 对但没开通）。两种 404 含义不同：
+#     ModelNotOpen                     ID 正确、模型存在，账号没开通 → 去开通页
+#     InvalidEndpointOrModel.NotFound  ID 压根解析不了（别名或已退役）→ 换 ID
+#
+# ⚠️ **除 evolving 外都必须带日期后缀**。不带日期的别名
+#   （`doubao-seed-2-0-mini`）一律 `NotFound`；带日期的（`-260428`）才被识别。
+#
+# ⚠️ **不要用 `doubao-seed-1-6`** —— 它和 `1-6-flash` / `1-6-vision` / `1-8` /
+#   `1-5-vision-pro` 官方标 `Retiring`，实探全部 `NotFound`。曾拿它当默认，是错的。
+#
+# 开通后可选的在售视觉档（元/百万 token，输入/输出）：
+#   2-0-mini-260428 0.2/2.0 · 2-0-lite-260428 0.6/3.6 · 2-1-turbo-260628 3.0/15
+#   2-0-pro-260215 3.2/16 · 2-1-pro-260628 6.0/30
+#
+# ⚠️ **Seedance / Seedream / seed3d 不能用** —— 那些是**生成**模型
+#   （文生视频 / 图片生成），Seedance 正是产出我们素材的那个。
+#   我们要的是反方向：看图输出文字。
+#
+# `GET /api/v3/models` 能列出账号可见模型（带 status 字段），比翻控制台快。
+
+ARK_API_KEY = _cred("ARK_API_KEY")
+ARK_VISION_MODEL = _cred("ARK_VISION_MODEL", "doubao-seed-evolving")
+
+
+def _vision_backend():
+    """有 Key 就用方舟，没有回落 stub（=保持「无口播就静音占位」旧行为）。"""
+    return "ark" if ARK_API_KEY else "stub"
+
+
+VISION_BACKEND = _vision_backend()
+
+# AI 口播文案缓存。和 ASR 缓存同一个目录 —— 都是「按源片段算一次、
+# 反复复用」的东西，且都该跟着用户数据目录走（更新应用不冲掉）。
+COPY_CACHE = os.path.join(CACHE_DIR, "copy.json")
+
+# 默认开。关掉即回落到「无口播片段塞静音、不配字幕」的旧行为。
+AI_COPY = True
