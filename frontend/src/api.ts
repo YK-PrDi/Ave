@@ -21,6 +21,7 @@ export interface Health {
     hook_limit: number
     sub_size: number
     speed: number
+    bgm_volume: number
   }
 }
 
@@ -91,6 +92,8 @@ export interface JobParams {
   speed?: number
   // 给无口播片段用 AI 补口播文案
   ai_copy?: boolean
+  // BGM 音量百分比（100 = 原始音量）。0 = 不加 BGM
+  bgm_volume?: number
 }
 
 // 渲染进度事件。type 决定其余字段是否存在。
@@ -115,6 +118,7 @@ export interface JobEvent {
   failed?: { index: number; error: string }[]
   speed?: number
   ai_copy?: boolean
+  bgm_volume?: number
   vision_backend?: string
   // 批量生成文案任务用（kind='copy'）
   action?: string

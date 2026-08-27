@@ -320,7 +320,7 @@ def point_texts(pools):
 
 def build_one(cb, recognizer, backend, rng, work, encoder,
               out_dir=None, bgm_dir=None, sub_size=None, speed=None,
-              copy_store=None, vision_backend=None):
+              copy_store=None, vision_backend=None, bgm_volume=None):
     """渲染一条成品。返回 (输出路径, 提示列表)。
 
     speed 参数废弃但保留接口兼容 —— 现在配音按固定语速合成，
@@ -454,8 +454,9 @@ def build_one(cb, recognizer, backend, rng, work, encoder,
     voice = render.concat_audio(voice_parts,
                                  os.path.join(clip_dir, "voice.mp3"),
                                  config.FFMPEG)
-    bgm = pick_bgm(rng, bgm_dir)
-    if bgm is None:
+    vol = config.BGM_VOLUME if bgm_volume is None else bgm_volume
+    bgm = pick_bgm(rng, bgm_dir) if vol > 0 else None
+    if bgm is None and vol > 0:
         notes.append("无 BGM（两层 bgm 目录都为空，见 docs/资源需求清单.md）")
 
     out_dir = out_dir or config.OUTPUT_DIR
@@ -463,13 +464,13 @@ def build_one(cb, recognizer, backend, rng, work, encoder,
     out = os.path.join(out_dir, f"混剪_{cb.index:03d}.mp4")
     render.render([c.path for c in cb.clips], voice, subs, out, config.FFMPEG,
                   bgm=bgm, total_dur=timeline, encoder=encoder,
-                  clip_speeds=clip_speeds)
+                  clip_speeds=clip_speeds, bgm_volume=vol)
     return out, notes
 
 
 def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
         out_dir=None, bgm_dir=None, sub_size=None, dedup=True, speed=None,
-        ai_copy=None, on_event=None, should_stop=None):
+        ai_copy=None, on_event=None, should_stop=None, bgm_volume=None):
     """跑一批混剪。命令行和 HTTP 层都走这里。
 
     on_event(dict)  —— 进度回调。事件形如
@@ -481,6 +482,8 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
             on_event(ev)
 
     speed = speed or config.PLAYBACK_SPEED
+    # 0 是合法值（不加 BGM），所以不能用 `or`
+    bgm_volume = config.BGM_VOLUME if bgm_volume is None else bgm_volume
     ai_copy = config.AI_COPY if ai_copy is None else ai_copy
     pools, stats = scan(source)
 
@@ -529,7 +532,7 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
     emit(type="start", total=len(combos), encoder=encoder,
          backend=config.TTS_BACKEND, out_dir=out_dir, stats=stats,
          dedup=dedup, theme_note=theme_note, speed=speed,
-         ai_copy=ai_copy,
+         ai_copy=ai_copy, bgm_volume=bgm_volume,
          vision_backend=vision_backend.name if vision_backend else "off")
 
     backend = make_tts_backend()
@@ -548,7 +551,8 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
                                    out_dir=out_dir, bgm_dir=bgm_dir,
                                    sub_size=sub_size, speed=speed,
                                    copy_store=copy_store,
-                                   vision_backend=vision_backend)
+                                   vision_backend=vision_backend,
+                                   bgm_volume=bgm_volume)
             record_manifest(out_dir, os.path.basename(out), cb, seed)
             ok += 1
             all_notes.extend(notes)
@@ -596,6 +600,8 @@ def main():
                     help="关闭卖点语义去重，接受同一条里出现近义卖点")
     ap.add_argument("--no-ai-copy", action="store_true",
                     help="关闭 AI 补口播文案，无口播片段回落静音占位")
+    ap.add_argument("--bgm-volume", type=float, default=config.BGM_VOLUME,
+                    help="BGM 音量百分比，0 = 不加 BGM（默认 %(default)s）")
     ap.add_argument("--dry-run", action="store_true", help="只看组合不渲染")
     args = ap.parse_args()
 
@@ -629,6 +635,8 @@ def main():
             # 画面逐段去适配，所以没有单一倍速值可报。
             # 前端那个倍速滑块是**播放/导出时**的后处理，与渲染无关。
             print("语速: 固定（画面逐段适配配音时长）")
+            print(f"BGM 音量: {ev['bgm_volume']}%"
+                  + ("（不加 BGM）" if ev["bgm_volume"] <= 0 else ""))
             print(f"配音后端: {ev['backend']}"
                   + ("  ⚠ 静音占位，等火山引擎凭证"
                      if ev["backend"] == "stub" else ""))
@@ -649,7 +657,8 @@ def main():
 
     r = run(source=args.source, points=args.points, limit=args.limit,
             seed=args.seed, dedup=not args.no_dedup, speed=args.speed,
-            ai_copy=not args.no_ai_copy, on_event=on_event)
+            ai_copy=not args.no_ai_copy, bgm_volume=args.bgm_volume,
+            on_event=on_event)
 
     print(f"\n完成 {r['ok']}/{r['total']} 条，用时 {r['seconds']:.0f}s")
     print(f"输出: {r['out_dir']}")

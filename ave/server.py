@@ -73,6 +73,8 @@ class JobReq(PreviewReq):
     speed: float | None = None
     # 给无口播片段用 AI 补口播文案。关掉则回落静音占位
     ai_copy: bool | None = None
+    # BGM 音量百分比。0 = 不加 BGM，默认 config.BGM_VOLUME
+    bgm_volume: float | None = None
 
 
 class Job:
@@ -113,7 +115,7 @@ class Job:
             seed=self.req.seed, out_dir=self.req.out_dir,
             bgm_dir=self.req.bgm_dir, sub_size=self.req.sub_size,
             dedup=self.req.dedup, speed=self.req.speed,
-            ai_copy=self.req.ai_copy,
+            ai_copy=self.req.ai_copy, bgm_volume=self.req.bgm_volume,
             on_event=on_event, should_stop=should_stop)
 
     def run(self):
@@ -162,7 +164,8 @@ def health():
         "defaults": {"points": config.POINT_COUNT,
                      "hook_limit": config.HOOK_USE_LIMIT,
                      "sub_size": config.SUBTITLE_SIZE,
-                     "speed": config.PLAYBACK_SPEED},
+                     "speed": config.PLAYBACK_SPEED,
+                     "bgm_volume": config.BGM_VOLUME},
     }
 
 

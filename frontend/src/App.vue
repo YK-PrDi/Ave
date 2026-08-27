@@ -25,6 +25,9 @@ const limit = ref(0)
 const dedup = ref(true)
 // 画面倍速。默认 1.2（用户 2026-08-26 定），1.0 = 原速
 const speed = ref(1.2)
+// BGM 音量百分比。默认 3（用户 2026-08-27 试听 0/3/5/8% 后定的）。
+// 真实默认来自 /api/health，这里只是首屏落地前的占位
+const bgmVolume = ref(3)
 // 给无口播分镜用 AI 补口播文案。默认开
 const aiCopy = ref(true)
 // 生成文案任务在跑时，别让人同时点渲染（后端只允许一个 job）
@@ -89,6 +92,7 @@ function params() {
     out_dir: outDir.value || undefined,
     dedup: dedup.value,
     speed: speed.value,
+    bgm_volume: bgmVolume.value,
     ai_copy: aiCopy.value,
   }
 }
@@ -125,6 +129,8 @@ onMounted(async () => {
     hookLimit.value = h.defaults.hook_limit
     subSize.value = h.defaults.sub_size
     speed.value = h.defaults.speed
+    // 旧后端没这个字段，?? 兜住 —— 否则滑块会变成 undefined
+    bgmVolume.value = h.defaults.bgm_volume ?? bgmVolume.value
     await doScan()
     await loadOutputs()
     await loadVisionState()
@@ -237,6 +243,7 @@ onUnmounted(() => unsubscribe?.())
       v-model:limit="limit"
       v-model:dedup="dedup"
       v-model:speed="speed"
+      v-model:bgm-volume="bgmVolume"
       v-model:ai-copy="aiCopy"
       :theme-note="themeNote"
       :stats="stats"

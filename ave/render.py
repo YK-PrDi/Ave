@@ -12,8 +12,10 @@
 import os
 import subprocess
 
-# BGM 相对配音压低多少（分贝）。口播要压得住 BGM。
-BGM_GAIN_DB = -18.0
+# BGM 音量默认值（百分比）。真正的默认在 `config.BGM_VOLUME`，
+# 这里只是 render 被单独调用时的兜底 —— 保持两处一致。
+# 原来是 `BGM_GAIN_DB = -18.0`，改百分比是为了前端滑块好表达（见 config 注释）。
+BGM_VOLUME_DEFAULT = 3.0
 
 # 编码器优先级：硬编码优先，末位 libx264 软编码兜底。
 # 兜底是随包带完整 ffmpeg 后才有的 —— 剪映那份没有 libx264，
@@ -35,12 +37,14 @@ def pick_encoder(ffmpeg):
         "若报这个错说明用的是裁剪版 ffmpeg（如剪映自带那份）。")
 
 
-def build_filter(n_clips, subs, has_bgm, total_dur, speed=None, clip_speeds=None):
+def build_filter(n_clips, subs, has_bgm, total_dur, speed=None, clip_speeds=None,
+                 bgm_volume=None):
     """拼出 filter_complex。
 
     subs: [(png_path, start, end), ...] 已按时间排序
     speed: **废弃** —— 用户 2026-08-26 定，改用逐段倍速（clip_speeds）
     clip_speeds: [float, ...] 每个片段的倍速。None 时全部按 1.0。
+    bgm_volume: BGM 音量百分比（100 = 原始音量）。None 用默认值。
     输入顺序约定：
       [0..n-1]      视频片段
       [n]           配音（已按片段拼好的整条音轨）
@@ -84,8 +88,12 @@ def build_filter(n_clips, subs, has_bgm, total_dur, speed=None, clip_speeds=None
 
     # 音频：配音 + BGM 混音
     if has_bgm:
+        vol = BGM_VOLUME_DEFAULT if bgm_volume is None else bgm_volume
         bgm = n_clips + 1
-        parts.append(f"[{bgm}:a]volume={BGM_GAIN_DB}dB,"
+        # `volume` 滤镜不带单位时就是线性倍数，百分比除 100 直接给。
+        # `normalize=0` 在下面的 amix 上 —— 不关的话 ffmpeg 会按输入数均分增益，
+        # 把口播也一起压掉，音量比例就不是这里算的了。
+        parts.append(f"[{bgm}:a]volume={vol / 100:.4f},"
                      f"atrim=0:{total_dur:.3f},asetpts=PTS-STARTPTS[bgmv]")
         parts.append(f"[{n_clips}:a][bgmv]amix=inputs=2:duration=first:"
                      f"dropout_transition=0:normalize=0[aout]")
@@ -97,7 +105,7 @@ def build_filter(n_clips, subs, has_bgm, total_dur, speed=None, clip_speeds=None
 
 def render(clips, voice_audio, subs, out_path, ffmpeg,
            bgm=None, total_dur=None, encoder=None, speed=None,
-           clip_speeds=None):
+           clip_speeds=None, bgm_volume=None):
     """渲染一条成品。
 
     clips:       [视频文件路径, ...] 按拼接顺序
@@ -107,8 +115,12 @@ def render(clips, voice_audio, subs, out_path, ffmpeg,
     total_dur:   总时长，用于裁 BGM
     speed:       **废弃**，全局单一倍速（旧接口，仍兜底支持）
     clip_speeds: [float, ...] 逐段倍速，让画面去贴合固定语速的配音
+    bgm_volume:  BGM 音量百分比。<=0 视为不加 BGM（省一路输入和一次混音）
     """
     encoder = encoder or pick_encoder(ffmpeg)
+    # 音量调到 0 就别费劲混了，直接当没 BGM
+    if bgm_volume is not None and bgm_volume <= 0:
+        bgm = None
     cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]
 
     for c in clips:
@@ -120,7 +132,8 @@ def render(clips, voice_audio, subs, out_path, ffmpeg,
         cmd += ["-i", png]
 
     fc = build_filter(len(clips), subs, bool(bgm), total_dur or 0,
-                      speed=speed, clip_speeds=clip_speeds)
+                      speed=speed, clip_speeds=clip_speeds,
+                      bgm_volume=bgm_volume)
     cmd += [
         "-filter_complex", fc,
         "-map", "[vout]", "-map", "[aout]",

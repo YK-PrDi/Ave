@@ -10,6 +10,7 @@ const props = defineProps<{
   limit: number
   dedup: boolean
   speed: number
+  bgmVolume: number
   aiCopy: boolean
   themeNote: string
   stats: ScanStats | null
@@ -24,6 +25,7 @@ const emit = defineEmits<{
   'update:limit': [number]
   'update:dedup': [boolean]
   'update:speed': [number]
+  'update:bgmVolume': [number]
   'update:aiCopy': [boolean]
 }>()
 
@@ -41,6 +43,15 @@ const pointsTooMany = computed(
 
 // 倍速超出这个范围画面/语速都会明显失真，提前拦
 const speedBad = computed(() => props.speed < 0.5 || props.speed > 2)
+
+// BGM 音量提示。12% 这个警戒线来自用户实听：原来的 -18dB ≈ 12.6%，
+// 反馈是「有点影响口播」。默认值 3% 是用户 2026-08-27 试听四档后定的。
+const bgmHint = computed(() => {
+  const v = props.bgmVolume
+  if (v <= 0) return '不加背景音乐'
+  if (v >= 12) return '偏大，可能压住口播'
+  return '越小越不抢口播'
+})
 </script>
 
 <template>
@@ -76,6 +87,16 @@ const speedBad = computed(() => props.speed < 0.5 || props.speed > 2)
         />
         <em v-if="speedBad" class="bad">只支持 0.5–2.0</em>
         <em v-else>导出时整体加速，1.0 = 不处理</em>
+      </label>
+
+      <label>
+        <span>背景音乐音量 <b class="val">{{ props.bgmVolume }}%</b></span>
+        <input
+          class="slider" type="range" min="0" max="30" step="1"
+          :value="props.bgmVolume"
+          @input="emit('update:bgmVolume', +($event.target as HTMLInputElement).value)"
+        />
+        <em :class="{ bad: props.bgmVolume >= 12 }">{{ bgmHint }}</em>
       </label>
 
       <label>
@@ -173,6 +194,16 @@ label em {
 label em.bad {
   color: #ff9c9c;
   opacity: 1;
+}
+label > span b.val {
+  color: var(--fg, #e8eef6);
+  font-weight: 500;
+}
+/* 滑块比 number 输入矮，补点上下留白让整行和邻居对齐 */
+input.slider {
+  padding: 6px 0;
+  accent-color: #5b8fd0;
+  cursor: pointer;
 }
 .out {
   display: flex;

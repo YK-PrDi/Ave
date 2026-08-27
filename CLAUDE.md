@@ -24,7 +24,7 @@
 | `ave/vision.py` | 抽帧 + 视觉模型写口播（给无口播分镜） | — | 在这里管缓存（缓存归 `pipeline.CopyStore`） |
 | `ave/subtitle.py` | Pillow 渲字幕 PNG | — | 改用 ffmpeg drawtext |
 | `ave/tts.py` | 配音合成（固定语速，`synth_fixed`） | — | 用慢放代替补静音、回头用 `synth_fit`（已废弃，会导致各段语速不一） |
-| `ave/render.py` | ffmpeg 拼接 / 叠字幕 / 混音 / 导出变速（`respeed`） | — | `apad=whole_dur`、让 `respeed` 覆盖原片、用 `asetrate` 代替 `atempo` |
+| `ave/render.py` | ffmpeg 拼接 / 叠字幕 / 混音（BGM 音量可调）/ 导出变速（`respeed`） | — | `apad=whole_dur`、让 `respeed` 覆盖原片、用 `asetrate` 代替 `atempo`、给 `amix` 去掉 `normalize=0` |
 | `ave/pipeline.py` | 主流程，CLI 与 HTTP 共用 | — | 绕过 `run()` 另写一套流程 |
 | `ave/server.py` | 本地 HTTP 服务，只听 127.0.0.1 | 8756 | 对外监听；把路由加在 StaticFiles 挂载之后 |
 | `ave/launcher.py` | exe 入口：`--pick-dir`（后续补抢端口/下模型/起服务） | — | 在这里写业务逻辑 |
@@ -72,6 +72,20 @@
    `raw = dur/voice_dur`，`cs > raw` 是配音偏长要压配音、`cs < raw` 是偏短要补静音。
    **`PLAYBACK_SPEED` 不再决定渲染倍速** —— 前端那个滑块是导出时的后处理。
    **ASR 时间戳要按 `cs` 同比压缩**（`s['start']/cs`）—— 那是原速下测的。
+15. **BGM 混音的 `amix` 必须带 `normalize=0`**。不带的话 ffmpeg 按输入数均分增益，
+   把口播一起压掉 —— `config.BGM_VOLUME` 那个百分比就不再是真实音量比。
+   音量用**百分比**暴露给界面（运营看不懂「-30 分贝」），`volume` 滤镜不带单位
+   就是线性倍数，除 100 直接给。0 = 不混 BGM，`render()` 会把 `bgm` 置 None
+   省一路输入。**默认 3%（≈-30dB），用户 2026-08-27 试听 0/3/5/8% 四条后亲耳定的**
+   （原来 -18dB ≈ 12.6%，反馈「有点影响口播」）。
+   ⚠️ **改这个值不准只看客观指标** —— 全片均值分不出 3% 和 5%（都 -22.7dB 左右，
+   BGM 比口播低三十分贝，对均值几乎无贡献）；且每次渲染 TTS 重新合成、
+   各条时长差到 0.7 秒，逐窗口对比也对不齐。验缩放要用受控测试
+   （同一段 BGM 只过 `volume` 滤镜，实测每档与理论差 <0.05dB），
+   **选哪档必须渲几条给用户听**。
+   ⚠️ **判空不准用 `or`** —— 0 是合法值，`bgm_volume or 默认` 会把「不加 BGM」
+   变成「用默认音量」。全链路一律 `if x is None`。
+
 14. **导出变速是渲染后的独立一步，不准覆盖原片**。`render.respeed()` 落
    `out_dir/导出_<speed>x/`，改倍速不用重渲（重渲 9 分钟 vs 变速一条 1.4 秒）。
    声音必须用 `atempo`（变速不变调），**不准用 `asetrate`**（会把人声拉成快进腔）。
