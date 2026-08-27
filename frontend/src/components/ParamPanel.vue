@@ -75,7 +75,7 @@ const speedBad = computed(() => props.speed < 0.5 || props.speed > 2)
           @input="emit('update:speed', +($event.target as HTMLInputElement).value)"
         />
         <em v-if="speedBad" class="bad">只支持 0.5–2.0</em>
-        <em v-else>1.0 = 原速，越大成品越短</em>
+        <em v-else>导出时整体加速，1.0 = 不处理</em>
       </label>
 
       <label>

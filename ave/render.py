@@ -35,11 +35,12 @@ def pick_encoder(ffmpeg):
         "若报这个错说明用的是裁剪版 ffmpeg（如剪映自带那份）。")
 
 
-def build_filter(n_clips, subs, has_bgm, total_dur, speed=1.0):
+def build_filter(n_clips, subs, has_bgm, total_dur, speed=None, clip_speeds=None):
     """拼出 filter_complex。
 
     subs: [(png_path, start, end), ...] 已按时间排序
-    speed: 画面倍速。>1 画面加速、成品变短。
+    speed: **废弃** —— 用户 2026-08-26 定，改用逐段倍速（clip_speeds）
+    clip_speeds: [float, ...] 每个片段的倍速。None 时全部按 1.0。
     输入顺序约定：
       [0..n-1]      视频片段
       [n]           配音（已按片段拼好的整条音轨）
@@ -47,15 +48,25 @@ def build_filter(n_clips, subs, has_bgm, total_dur, speed=1.0):
       之后           字幕 PNG
     """
     parts = []
-
-    # 视频拼接。倍速在 concat **之前**逐路做 —— 每个片段各自压缩，
-    # 与 pipeline 侧按 dur/speed 排的时间轴逐段对齐；放 concat 之后
-    # 虽然总长一样，但依赖各段 PTS 已被正确重排，不如逐路稳。
-    if speed != 1.0:
+    # 画面按逐段倍速变速，在 concat 之前逐路做。
+    # 配音侧已按固定语速合成并拼好，这里画面同步压缩/放慢去贴合配音。
+    if clip_speeds:
+        if len(clip_speeds) != n_clips:
+            raise ValueError(f"clip_speeds 长度 {len(clip_speeds)} ≠ n_clips {n_clips}")
+        for i, cs in enumerate(clip_speeds):
+            if abs(cs - 1.0) < 0.001:
+                # 倍速接近 1.0，不做 setpts 避免浮点累积
+                parts.append(f"[{i}:v]null[sp{i}]")
+            else:
+                parts.append(f"[{i}:v]setpts=PTS/{cs:.6f}[sp{i}]")
+        vin = "".join(f"[sp{i}]" for i in range(n_clips))
+    elif speed is not None and abs(speed - 1.0) > 0.001:
+        # 兜底：全局单一倍速（旧接口）
         for i in range(n_clips):
             parts.append(f"[{i}:v]setpts=PTS/{speed:.6f}[sp{i}]")
         vin = "".join(f"[sp{i}]" for i in range(n_clips))
     else:
+        # 无倍速
         vin = "".join(f"[{i}:v]" for i in range(n_clips))
     parts.append(f"{vin}concat=n={n_clips}:v=1:a=0[vcat]")
 
@@ -85,7 +96,8 @@ def build_filter(n_clips, subs, has_bgm, total_dur, speed=1.0):
 
 
 def render(clips, voice_audio, subs, out_path, ffmpeg,
-           bgm=None, total_dur=None, encoder=None, speed=1.0):
+           bgm=None, total_dur=None, encoder=None, speed=None,
+           clip_speeds=None):
     """渲染一条成品。
 
     clips:       [视频文件路径, ...] 按拼接顺序
@@ -93,7 +105,8 @@ def render(clips, voice_audio, subs, out_path, ffmpeg,
     subs:        [(png路径, 起, 止), ...]
     bgm:         BGM 文件路径，可为 None
     total_dur:   总时长，用于裁 BGM
-    speed:       画面倍速，>1 变快变短
+    speed:       **废弃**，全局单一倍速（旧接口，仍兜底支持）
+    clip_speeds: [float, ...] 逐段倍速，让画面去贴合固定语速的配音
     """
     encoder = encoder or pick_encoder(ffmpeg)
     cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]
@@ -106,7 +119,8 @@ def render(clips, voice_audio, subs, out_path, ffmpeg,
     for png, _s, _e in subs:
         cmd += ["-i", png]
 
-    fc = build_filter(len(clips), subs, bool(bgm), total_dur or 0, speed)
+    fc = build_filter(len(clips), subs, bool(bgm), total_dur or 0,
+                      speed=speed, clip_speeds=clip_speeds)
     cmd += [
         "-filter_complex", fc,
         "-map", "[vout]", "-map", "[aout]",

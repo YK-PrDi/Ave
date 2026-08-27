@@ -20,10 +20,10 @@
 |---|---|---|---|
 | `combo.py` | 分镜解析 + 排列组合抽样 | — | 任何 IO、ffmpeg 调用、网络请求 |
 | `ave/config.py` | 配置与路径集中处，凭证填这里 | — | 业务逻辑 |
-| `ave/asr.py` | 语音识别 + 缓存 + 幻觉闸门 | — | 删闸门、动 `SPEECH_RATIO` 阈值 |
+| `ave/asr.py` | 语音识别 + 缓存 + 幻觉闸门 + 同音纠正表 | — | 删闸门、动 `SPEECH_RATIO` 阈值、往 `CORRECTIONS` 塞改写（只放确认听错的） |
 | `ave/vision.py` | 抽帧 + 视觉模型写口播（给无口播分镜） | — | 在这里管缓存（缓存归 `pipeline.CopyStore`） |
 | `ave/subtitle.py` | Pillow 渲字幕 PNG | — | 改用 ffmpeg drawtext |
-| `ave/tts.py` | 配音合成 + 时长贴合 | — | 用慢放代替补静音 |
+| `ave/tts.py` | 配音合成（固定语速，`synth_fixed`） | — | 用慢放代替补静音、回头用 `synth_fit`（已废弃，会导致各段语速不一） |
 | `ave/render.py` | ffmpeg 拼接 / 叠字幕 / 混音 | — | `apad=whole_dur` |
 | `ave/pipeline.py` | 主流程，CLI 与 HTTP 共用 | — | 绕过 `run()` 另写一套流程 |
 | `ave/server.py` | 本地 HTTP 服务，只听 127.0.0.1 | 8756 | 对外监听；把路由加在 StaticFiles 挂载之后 |
@@ -62,11 +62,16 @@
    重新归一，得到的**入选概率不与权重成正比** —— 实测单成员主题仍有 11 次曝光，
    期望只有 5.9【实测】。必须直接把入选概率定成 ∝ 成员数（超 1 截顶）再用
    Madow 系统抽样实现，见 `combo.py:inclusion_probs()`。
-12. **倍速改时间轴，不准渲完再整体变速**。语义是「画面加速 → 成品变短」：
-   `build_one()` 用 `eff = dur / speed` 作为时间轴基准（TTS 目标时长、字幕窗口、
-   `timeline +=` 全用它），渲染侧每路视频 `setpts=PTS/speed` **在 concat 之前**逐路做。
-   事后整体变速会同时拉高音调；放 concat 之后则依赖各段 PTS 已被正确重排。
-   **ASR 时间戳要同比压缩**（`s['start']/speed`）—— 那是原速下测的，不除会错位。
+12. **配音固定语速，画面逐段适配 —— 不准让配音去贴合画面**。
+   原来 `tts.synth_fit()` 是每段各自算语速填满自己的时长，实测真人段
+   3.84~10.64 字/秒、AI 段 2.53，用户实听「有的快有的慢、AI 那段听得出来」【实测】。
+   现在：`tts.synth_fixed()` 按 `FIXED_SPEED` 合成 → 量真实时长 →
+   **画面倍速 = 源片时长 / 配音时长**，逐段不同，传 `render(clip_speeds=[...])`。
+   倍速夹在 `CLIP_SPEED_MIN/MAX = 0.9/1.8`，超出才回落压配音/补静音。
+   **两个分支方向极易搞反**（第一版就写反了，现象是「补静音失败」）：
+   `raw = dur/voice_dur`，`cs > raw` 是配音偏长要压配音、`cs < raw` 是偏短要补静音。
+   **`PLAYBACK_SPEED` 不再决定渲染倍速** —— 前端那个滑块是导出时的后处理。
+   **ASR 时间戳要按 `cs` 同比压缩**（`s['start']/cs`）—— 那是原速下测的。
 13. **AI 补的口播文案不准覆盖人工修改**。`CopyStore` 的 `source` 字段区分
    `'ai'` / `'edited'`，`edited` 的即使 `force=True` 也不重生成 —— 否则用户改完一批，
    下次跑全量就被模型悄悄冲掉。要丢弃得在界面上清空那条。

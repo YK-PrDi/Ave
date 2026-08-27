@@ -214,9 +214,10 @@ class CopyStore:
         frames = vision.extract_frames(
             clip.path, os.path.join(config.WORK_DIR, "frames"),
             config.FFMPEG, dur=None)
+        lo, hi = vision.char_range_for(duration)
         txt = backend.write_copy(
             frames, role=clip.role, desc=clip.desc,
-            max_chars=vision.max_chars_for(duration))
+            max_chars=hi, min_chars=lo)
         for f in frames:
             try:
                 os.remove(f)
@@ -320,21 +321,21 @@ def point_texts(pools):
 def build_one(cb, recognizer, backend, rng, work, encoder,
               out_dir=None, bgm_dir=None, sub_size=None, speed=None,
               copy_store=None, vision_backend=None):
-    """渲染一条成品。返回 (输出路径, 提示列表)。"""
+    """渲染一条成品。返回 (输出路径, 提示列表)。
+
+    speed 参数废弃但保留接口兼容 —— 现在配音按固定语速合成，
+    画面倍速逐段计算（用户 2026-08-26 定，消除各段快慢不一的问题）。
+    """
     notes = []
-    speed = speed or config.PLAYBACK_SPEED
     clip_dir = os.path.join(work, f"c{cb.index:03d}")
     os.makedirs(clip_dir, exist_ok=True)
 
-    voice_parts, subs, timeline = [], [], 0.0
+    voice_parts, subs, timeline, clip_speeds = [], [], 0.0, []
 
     for i, clip in enumerate(cb.clips):
         dur = tts.probe_duration(clip.path, config.FFMPEG)
         if dur <= 0:
             raise RuntimeError(f"无法读取时长: {clip.path}")
-        # 倍速后的有效时长。时间轴、配音目标、字幕窗口全部按这个排 ——
-        # 原始 dur 只用来算它。画面侧由 render 的 setpts 同步压缩。
-        eff = dur / speed
 
         res = recognizer.recognize(clip.path, work)
         segments = res["segments"]
@@ -345,36 +346,79 @@ def build_one(cb, recognizer, backend, rng, work, encoder,
         # 「起点 timeline、终点 timeline+eff」，切块/分摊时长/渲 PNG 全照常。
         if not text and copy_store is not None and vision_backend is not None:
             try:
-                ai_text, fresh = copy_store.make(clip, eff, vision_backend)
+                # max_chars_for() 用的那个 eff 已经没了（按固定语速合成不再需要），
+                # 传个粗估值进去 —— 占位，模型输出会超就超。下游消化得了。
+                guess_eff = dur / 1.2
+                ai_text, fresh = copy_store.make(clip, guess_eff, vision_backend)
             except (RuntimeError, OSError) as e:
                 # 单个片段生成失败不该拖垮整批，回落静音占位
                 ai_text, fresh = "", False
                 notes.append(f"{clip.name}: AI 文案生成失败（{str(e)[:120]}）")
             if ai_text:
                 text = ai_text
-                segments = [{"start": 0.0, "end": eff, "text": ai_text}]
+                # 构造的伪 segment 时间戳直接写死 0~dur（还没定倍速）
+                segments = [{"start": 0.0, "end": dur, "text": ai_text}]
                 src = "新生成" if fresh else "取自缓存"
                 notes.append(f"{clip.name}: 无口播，已用 AI 文案配音（{src}）")
 
         vpath = os.path.join(clip_dir, f"v{i}.mp3")
         if text:
-            # 有口播：TTS 合成并贴合画面时长
-            v = tts.synth_fit(backend, text, eff, vpath, config.FFMPEG,
-                              clip_dir)
-            if v.note:
-                notes.append(f"{clip.name}: {v.note}")
-            # 字幕按句摆位，时间平分该片段
+            # 固定语速合成，返回实际时长。
+            # 画面倍速 = dur / voice_dur —— 配音短就加速画面、长就放慢画面。
+            vpath, voice_dur = tts.synth_fixed(backend, text, vpath,
+                                               config.FFMPEG, clip_dir)
+            if voice_dur <= 0:
+                raise RuntimeError(f"TTS 输出时长为 0: {clip.name}")
+
+            # 画面倍速夹在安全区间内，超出时回落补静音/atempo 压配音。
+            # 典型：配音明显偏短（比如 2 字）→ 倍速会 >1.8，不让画面太快，
+            # 改成补静音；配音明显偏长 → 倍速 <0.9，不让画面卡顿，改成压配音。
+            cs = max(tts.CLIP_SPEED_MIN,
+                     min(dur / voice_dur, tts.CLIP_SPEED_MAX))
+            eff = dur / cs  # 画面在该倍速下的实际占用时长
+
+            # ⚠️ 这两个分支的方向容易搞反，推导记在这：
+            # 理想倍速 raw = dur / voice_dur，cs 是把它夹进 [0.9, 1.8] 的结果。
+            #   raw < 0.9（配音**比画面长**）→ cs 被**抬到** 0.9，故 cs > raw
+            #     此时 eff = dur/0.9 仍短于 voice_dur → 要 atempo 压配音
+            #   raw > 1.8（配音**比画面短**）→ cs 被**压到** 1.8，故 cs < raw
+            #     此时 eff = dur/1.8 仍长于 voice_dur → 要补静音
+            # 第一版写反了，实测报「补静音失败」（gap 是负数）【2026-08-26】。
+            raw = dur / voice_dur
+            if cs > raw + 0.01:
+                # 配音比画面长，画面已放慢到下限仍不够 —— atempo 压配音
+                want_tempo = voice_dur / eff
+                vpath_adj = os.path.join(clip_dir, f"v{i}_adj.mp3")
+                if tts.apply_atempo(vpath, vpath_adj, want_tempo, config.FFMPEG):
+                    vpath = vpath_adj
+                    voice_dur = tts.probe_duration(vpath, config.FFMPEG)
+                    notes.append(
+                        f"{clip.name}: 配音比画面长 {(want_tempo - 1) * 100:.0f}%，"
+                        f"已加速压缩（画面倍速已夹到下限 {cs:.2f}）")
+                else:
+                    notes.append(f"{clip.name}: atempo 失败，配音可能明显不对")
+            elif cs < raw - 0.01:
+                # 配音比画面短，画面已加速到上限仍有余 —— 补静音
+                gap = eff - voice_dur
+                vpath_pad = os.path.join(clip_dir, f"v{i}_pad.mp3")
+                if tts.pad_to(vpath, vpath_pad, eff, config.FFMPEG, voice_dur):
+                    vpath = vpath_pad
+                    notes.append(
+                        f"{clip.name}: 配音比画面短 {gap:.2f}s，已补静音"
+                        f"（画面倍速已夹到上限 {cs:.2f}）")
+                else:
+                    notes.append(f"{clip.name}: 补静音失败，时长可能不对")
+
+            # 字幕按句摆位，时间平分该片段。
+            # ASR 时间戳是原速的，倍速后要同比压缩；AI 文案是单段伪 segment，
+            # 走 n==1 分支不受影响。
             n = len(segments)
             for k, s in enumerate(segments):
-                # ASR 时间戳是原速的，倍速后要同比压缩才对得上画面。
-                # AI 文案那条是单段伪 segment，走 n==1 分支不受影响。
-                st = timeline + (s["start"] / speed if n > 1 else 0.0)
-                en = timeline + (s["end"] / speed if n > 1 else eff)
+                st = timeline + (s["start"] / cs if n > 1 else 0.0)
+                en = timeline + (s["end"] / cs if n > 1 else eff)
                 en = min(en, timeline + eff)
                 # 一句再切成 ~8 字的小块先后显示（用户 2026-08-17）。
-                # ASR 单句实测中位 26 字，整句挂满全程一次看太多字。
-                # 块时长按**字数比例**分摊该句时长 —— 不等分，
-                # 否则 3 字的「接住,」和 8 字的块停留一样久。
+                # 块时长按**字数比例**分摊该句时长 —— 不等分。
                 blocks = subtitle.split_blocks(s["text"])
                 if not blocks:
                     continue
@@ -394,10 +438,13 @@ def build_one(cb, recognizer, backend, rng, work, encoder,
                     if png:
                         subs.append((png, at, bend))
                     at = bend
+            clip_speeds.append(cs)
         else:
-            # 无口播：静音占位，不配字幕（用户 2026-08-14 决定：保留画面）
+            # 无口播：静音占位，画面倍速 1.0。不配字幕（用户 2026-08-14 决定）
             backend_stub = tts.StubBackend(config.FFMPEG)
+            eff = dur  # 没配音不用倍速，按原长
             backend_stub.synth("", vpath, target=eff)
+            clip_speeds.append(1.0)
             if res["note"]:
                 notes.append(f"{clip.name}: {res['note']}")
 
@@ -405,8 +452,8 @@ def build_one(cb, recognizer, backend, rng, work, encoder,
         timeline += eff
 
     voice = render.concat_audio(voice_parts,
-                               os.path.join(clip_dir, "voice.mp3"),
-                               config.FFMPEG)
+                                 os.path.join(clip_dir, "voice.mp3"),
+                                 config.FFMPEG)
     bgm = pick_bgm(rng, bgm_dir)
     if bgm is None:
         notes.append("无 BGM（两层 bgm 目录都为空，见 docs/资源需求清单.md）")
@@ -415,7 +462,8 @@ def build_one(cb, recognizer, backend, rng, work, encoder,
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir, f"混剪_{cb.index:03d}.mp4")
     render.render([c.path for c in cb.clips], voice, subs, out, config.FFMPEG,
-                  bgm=bgm, total_dur=timeline, encoder=encoder, speed=speed)
+                  bgm=bgm, total_dur=timeline, encoder=encoder,
+                  clip_speeds=clip_speeds)
     return out, notes
 
 
@@ -577,8 +625,10 @@ def main():
             print(f"组合方案: {ev['total']} 条\n")
             print(ev["theme_note"])
             print(f"编码器: {ev['encoder']}")
-            print(f"画面倍速: {ev['speed']}x"
-                  + ("（原速）" if ev["speed"] == 1.0 else ""))
+            # 不再打「画面倍速」—— 用户 2026-08-26 定：配音按固定语速合成、
+            # 画面逐段去适配，所以没有单一倍速值可报。
+            # 前端那个倍速滑块是**播放/导出时**的后处理，与渲染无关。
+            print("语速: 固定（画面逐段适配配音时长）")
             print(f"配音后端: {ev['backend']}"
                   + ("  ⚠ 静音占位，等火山引擎凭证"
                      if ev["backend"] == "stub" else ""))

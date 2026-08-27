@@ -25,6 +25,23 @@ SPEED_MIN, SPEED_MAX = 0.8, 1.3
 # atempo 微调容差 —— ±10% 内人耳听不出
 ATEMPO_TOLERANCE = 0.10
 
+# ---------------- 固定语速模式（用户 2026-08-26 定） ----------------
+#
+# 原来 `synth_fit()` 是**每段各自算语速去贴合自己的时长**：
+#     want = natural / target_dur; speed = clamp(want, 0.8, 1.3)
+# 文本相对时长越短，语速被压得越慢。实测后果：
+#     真人口播 3.84~10.64 字/秒（差 2.8 倍），AI 文案只有 2.17~2.85
+# 用户实听反馈「有的念得快有的慢」「AI 那段明显听得出来」，就是这个。
+#
+# 现在改成**固定语速合成，让画面倍速去适配配音**（用户 2026-08-26 定）：
+#     配音按 FIXED_SPEED 合成 → 量出真实时长 → 画面倍速 = 原时长/配音时长
+# 这样全片语速绝对一致，且口播说完不会留白（画面同步收紧）。
+FIXED_SPEED = 1.0
+
+# 画面倍速的安全区间。超出就不再让画面适配，回落到补静音/压配音 ——
+# 画面快过 1.8 倍像快进、慢于 0.9 倍会看出卡顿。
+CLIP_SPEED_MIN, CLIP_SPEED_MAX = 0.9, 1.8
+
 
 @dataclass
 class Voiced:
@@ -182,8 +199,33 @@ class VolcanoBackend:
         return True
 
 
+def synth_fixed(backend, text, out_path, ffmpeg, work_dir, speed=FIXED_SPEED):
+    """固定语速合成，不贴合目标时长。
+
+    返回 (out_path, 实际时长)。
+    成功返回时 out_path 保证存在且可读；失败抛 RuntimeError。
+
+    **不做任何 atempo/apad**。调用方量出实际时长后，由**画面倍速**去适配
+    （用户 2026-08-26 定）—— 这样全片语速绝对一致，口播说完画面同步收紧。
+    """
+    os.makedirs(work_dir, exist_ok=True)
+    tmp = os.path.join(work_dir, "_fixed.mp3")
+    if not backend.synth(text, tmp, speed=speed, target=None):
+        raise RuntimeError("TTS 合成失败")
+    dur = probe_duration(tmp, ffmpeg)
+    if dur <= 0:
+        raise RuntimeError("无法测量 TTS 输出时长")
+    if tmp != out_path:
+        with open(tmp, "rb") as s, open(out_path, "wb") as d:
+            d.write(s.read())
+    return out_path, dur
+
+
 def synth_fit(backend, text, target_dur, out_path, ffmpeg, work_dir):
     """合成配音并贴合 target_dur。
+
+    ⚠️ **已废弃** —— 用户 2026-08-26 反馈「各段语速差太大」后，
+    改用 synth_fixed() + 画面倍速适配。这里保留只是怕别的地方还在调。
 
     两步走：先按 1.0 语速试合成、量实际时长算出所需语速；
     语速在 [SPEED_MIN, SPEED_MAX] 内就重新合成，超出则夹到边界，

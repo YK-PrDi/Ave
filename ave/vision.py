@@ -32,9 +32,20 @@ DEFAULT_FRAMES = 3
 # 帧宽。方舟会把过大的图缩到像素上限内，自己先缩省上传体积。
 FRAME_WIDTH = 512
 
-# 中文口播语速，字/秒。与 `tts.StubBackend` 的 0.22 s/字 同一个数，
-# 不另立常数 —— 那边改了这边要跟着改。
-CHARS_PER_SEC = 1.0 / 0.22
+# 中文口播语速，字/秒。**实测值**，不是估的。
+#
+# ⚠️ 原来写的是 `1.0 / 0.22 = 4.55`，那是抄 `tts.StubBackend` 的 0.22 s/字 ——
+# 而 StubBackend 是**产静音占位用的假值**，不代表真人语速。
+# 2026-08-26 量了缓存里 52 段真人口播（字数 / 倍速后时长）：
+#     范围 3.84 ~ 10.64，中位 5.91，均值 6.21 字/秒
+# 用户实听反馈「AI 那段明显比真人慢、听得出是补的」，根因就是这个常数偏低：
+# 上限算成 21 字，模型只写 13 字，TTS 为填满窗口把语速压到 2.5 字/秒。
+# 改用实测中位数 5.91。
+CHARS_PER_SEC = 5.91
+
+# 字数下限占上限的比例。**只给上限不够** —— 实测模型偏保守，
+# 给 21 字它只写 13 字（62%）。明确告诉它下限，逼它写够。
+MIN_CHARS_RATIO = 0.85
 
 # 模型爱加的包装，生成后剥掉。
 _STRIP_PREFIX = re.compile(
@@ -74,6 +85,14 @@ def max_chars_for(duration):
     return max(6, int(duration * CHARS_PER_SEC * 0.92))
 
 
+def char_range_for(duration):
+    """返回 (下限, 上限)。给下限是为了逼模型写够字数 ——
+    只给上限时实测它只写到 62%，配音就得放慢才能填满画面。"""
+    hi = max_chars_for(duration)
+    lo = max(6, int(hi * MIN_CHARS_RATIO))
+    return lo, hi
+
+
 # 角色决定文案的说话方式。三者在成品里的位置和功能完全不同，
 # 用同一套提示词会让钩子写得像卖点、结尾不促单。
 ROLE_BRIEF = {
@@ -86,7 +105,7 @@ ROLE_BRIEF = {
 }
 
 
-def build_prompt(role, desc, max_chars):
+def build_prompt(role, desc, max_chars, min_chars=None):
     """拼提示词。
 
     `desc` 是文件名里人写的内容概括（如「通风悬挂」），
@@ -102,7 +121,12 @@ def build_prompt(role, desc, max_chars):
         lines.append(f"这一段要讲的重点是「{desc}」，务必围绕它写。")
     lines += [
         f"产品背景与常用词：{asr.DOMAIN_PROMPT}",
-        f"字数**不超过 {max_chars} 字**，这是硬性要求（口播要贴合画面时长）。",
+        # 必须给下限。只给上限时实测模型只写到 62%（21 字上限只写 13 字），
+        # 配音为填满画面就得放慢，用户一听就知道是 AI 补的。
+        (f"字数**必须落在 {min_chars}~{max_chars} 字之间**，这是硬性要求。"
+         f"少于 {min_chars} 字会导致配音过慢、听起来不自然，务必写够。"
+         if min_chars else
+         f"字数**不超过 {max_chars} 字**，这是硬性要求（口播要贴合画面时长）。"),
         "只输出口播正文本身，简体中文，不要标题、不要引号、不要解释、"
         "不要分镜说明、不要写「口播：」之类的前缀。",
     ]
@@ -138,7 +162,8 @@ class StubVisionBackend:
     name = "stub"
     note = "未配置 ARK_API_KEY，无法生成 AI 口播文案"
 
-    def write_copy(self, frames, role="point", desc="", max_chars=40):
+    def write_copy(self, frames, role="point", desc="", max_chars=40,
+                   min_chars=None):
         return ""
 
 
@@ -234,11 +259,12 @@ class ArkVisionBackend:
                           if isinstance(p, dict))
         return (txt or "").strip(), body
 
-    def write_copy(self, frames, role="point", desc="", max_chars=40):
+    def write_copy(self, frames, role="point", desc="", max_chars=40,
+                   min_chars=None):
         """看图写口播。frames 为空则返回空串（调用方回落静音占位）。"""
         if not frames:
             return ""
-        prompt = build_prompt(role, desc, max_chars)
+        prompt = build_prompt(role, desc, max_chars, min_chars)
         txt, _body = self._post(self._payload(frames, prompt))
         out = clean_copy(txt)
         # 超字数不重试 —— 再问一次多半还是超，且贵。TTS 那边本来就会

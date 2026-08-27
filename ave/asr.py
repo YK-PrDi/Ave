@@ -46,6 +46,40 @@ def _to_simplified(text):
         return text.translate(FALLBACK_T2S)
 
 
+# 人工纠正表（用户 2026-08-26 要求）。Whisper 同音误识里
+# **领域词表救不回来的**那些，在这里逐条替换。
+#
+# 与 `DOMAIN_PROMPT` 的分工：词表是**事前**引导（喂 initial_prompt，
+# 让模型倾向于输出这些词），这张表是**事后**修正 —— 有些错就算喂了词表
+# 也照错，比如「拿哪块」→「哪哪块」（“哪”本身在词表覆盖不到的位置）。
+#
+# ⚠️ 只放**确认听错**的，别放「我觉得这么说更好」的改写 ——
+# 字幕要忠实于口播实际说的话，不然字幕和人声对不上更糟。
+#
+# ⚠️ 改这张表后要**清 ASR 缓存对应条目**才生效，或用 force=True 重识别。
+# 缓存里存的是修正后的文本（在 recognize() 里就替换掉了）。
+CORRECTIONS = {
+    # 用户 2026-08-26 在混剪_002 第 13 秒听出来的
+    "哪哪块": "拿哪块",
+    # 以下是按同音词对扫描 52 段全文找出来的（2026-08-26）
+    "股巢味": "股潮味",          # 同一句话在别的文件夹里识别对了，比对得出
+    "压海绵": "百洁绵",
+    # ⚠️ 短词要带上下文，"身手"/"低进" 单独替换会误伤
+    # （「身手不凡」「低进度」之类），虽然本产品语境里不太可能出现，
+    # 但纠正表是全局生效的，宁可写长一点。
+    "几样身手就有": "几样伸手就有",
+    "重力低进": "重力滴进",
+}
+
+
+def _apply_corrections(text):
+    """套用人工纠正表。"""
+    for wrong, right in CORRECTIONS.items():
+        if wrong in text:
+            text = text.replace(wrong, right)
+    return text
+
+
 def _is_hallucination(text):
     t = text.strip()
     if not t:
@@ -169,7 +203,9 @@ class Recognizer:
         )
         out, dropped = [], 0
         for s in segs:
-            txt = _to_simplified(s.text.strip())
+            # 顺序有意义：先转简体再套纠正表 —— 表里的键写的是简体，
+            # 反过来会漏掉繁体形态的同一个错。
+            txt = _apply_corrections(_to_simplified(s.text.strip()))
             if _is_hallucination(txt):
                 dropped += 1
                 continue
