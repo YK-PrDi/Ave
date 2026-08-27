@@ -52,19 +52,22 @@ Corresponding Source 包含「控制编译与安装的脚本」，不只是 ffmp
 索取源码：在 `https://github.com/YK-PrDi/Ave/issues` 开 issue，
 或联系仓库所有者。本承诺自交付副本之日起 **至少三年内有效**。
 
-**两份归档已于 2026-08-17 下载留存**（本机 `dist-src/`，不进版本库）：
-16.9MB + 102KB。上游随时可能消失，所以先抓下来 —— 等 release 建好
-`gh release upload` 传的必须是这两个文件，别重新下载后再传
-（虽然 codeload 实测字节确定，但没必要多冒一次风险）。
+**两份归档已于 2026-08-27 上传到 release `v0.1.0`**
+（`https://github.com/YK-PrDi/Ave/releases/tag/v0.1.0`）：16.9MB + 102KB。
+本机 `dist-src/` 仍留副本（不进版本库）。
 
-**SHA256 可复现性已验**：codeload 的 tarball 重下字节完全一致
-（构建脚本快照重下两次哈希相同）。所以上表的值现在就能钉死，
-不必等上传。⚠ 但**别用本地 `tar czf` 重新打包** —— gzip 会把时间戳
-写进字节流，同一份源码打两次哈希不同，那样上表就对不上了。
+**SHA256 已验证到端**：匿名下载回 release 上的两个资产，哈希与上表一致、
+且与本机 `dist-src/` 逐字节相同（`cmp` 通过）。
+⚠ 但**别用本地 `tar czf` 重新打包** —— gzip 会把时间戳写进字节流，
+同一份源码打两次哈希不同，那样上表就对不上了。
 
-> 🔴 **资产还没上传到 release**（还没建 release）。哈希已钉死、文件已留存，
-> 但**对外分发前必须真把它们传上去** —— 写了哈希不等于别人能下到东西。
-> 具体操作见下方第四节。`python 准备素材.py --check` 会检查占位符。
+> ⚠️ **下载大文件会被截断**【实测 2026-08-27】：头一次 `curl` 拿
+> `ffmpeg-src` 只收到 16,706,432 字节（少 195,495），哈希自然对不上。
+> **别据此判断上传坏了** —— 加 `--retry 5 --retry-all-errors -C -`
+> 续传补齐后哈希完全正确。校验前先比字节数。
+
+**GPL 义务已履行**（自 2026-08-27 起至少三年）：别删这两个资产、
+别把 release 改成 draft 或撤下。
 
 **为什么选 GitHub Releases**：源码 zip 不该进 git 仓库本体（几十 MB 且每次
 更新存全量），但 Releases 的资产不占仓库历史，又和 exe 放在同一个地方 ——
@@ -148,14 +151,20 @@ Could not find module 'avcodec-62-....dll' (or one of its dependencies)
 
 **归档位置已定（2026-08-16 用户决定）：GitHub Releases。**
 
-**第 1、2 步已于 2026-08-17 做完** —— 两份归档在本机 `dist-src/`，
-SHA256 已填进第二节。剩下的只有第 3 步：
+**三步都已做完（第 1、2 步 2026-08-17，第 3 步 2026-08-27）**：
+两份归档在本机 `dist-src/`，SHA256 已填进第二节，
+并已上传到 release `v0.1.0`。当时用的命令：
 
 ```bash
 # 3. 连同 exe 一起传到发布 release（gh CLI）
 cd dist-src
 gh release upload <tag> ffmpeg-src-7c533d0f86.tar.gz ffmpeg-builds-snapshot.tar.gz
 ```
+
+⚠ `gh` 的 device-code 登录端点（`github.com/login/device/code`）在本机连不上
+【实测 2026-08-27，`api.github.com` 与 `github.com` 都通，只有它超时】。
+备选：`gh auth login --with-token`，或直接在网页
+`releases/new` 手工建、拖文件上传（本次走的这条）。
 
 ⚠ **传的必须是 `dist-src/` 里那两个文件**，别重新下载 —— 第二节的哈希是
 按它们算的。若归档丢了要重建，用下面的命令（**不是 `git clone` + `tar czf`**，

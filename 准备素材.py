@@ -50,6 +50,10 @@ FFMPEG_ZIP_SHA256 = \
 FFMPEG_EXE_SHA256 = \
     "5d5e06fbb900fd7a45a82eb0529e67f905853432139f673ac90aff45930504d8"
 
+# 我们自己发布 GPL 源码归档的那个 release。`--check` 会实查它上面有没有资产。
+SOURCE_REPO = "YK-PrDi/Ave"
+SOURCE_RELEASE_TAG = "v0.1.0"
+
 # 思源黑体。⚠ 必须用 release 里的 zip，不能走 raw.githubusercontent 单文件 ——
 # 那个路径下回来只有 1.44MB（正常 17MB），magic 是 OTTO 看着像真 OTF，
 # 但 Pillow 加载报 `horizontal metrics (hmtx) table missing`【实测】。
@@ -337,9 +341,54 @@ def check_offer_consistency():
         print(f"             ⚠ dist-src/ 缺 {', '.join(miss)} —— "
               "重建命令见 SOURCE-OFFER.md 第四节")
     else:
-        print("             ℹ 归档已留存 dist-src/，"
-              "但**尚未上传到 release**，对外分发前必须传")
+        print("             ✓ 归档留存 dist-src/")
+    check_release_assets(want)
     return True
+
+
+def check_release_assets(want):
+    """实查 GitHub：承诺的源码资产在 release 上吗？
+
+    **不准写死结论。** 2026-08-17 那版把「尚未上传」硬编码在这里，
+    2026-08-27 真传上去之后它还在喊没传 —— 而反过来写死「已上传」
+    只是换个方向骗人：资产哪天被删了，脚本照样说一切正常。
+    所以这里去问 API，让输出跟着事实走。
+
+    离网只降级成「查不了」，不判失败 —— 打包本身不需要联网。
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    api = (f"https://api.github.com/repos/{SOURCE_REPO}/releases/tags/"
+           f"{SOURCE_RELEASE_TAG}")
+    try:
+        with urllib.request.urlopen(api, timeout=15) as r:
+            data = json.load(r)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"             ℹ 查不到 release（{str(e)[:50]}）—— "
+              f"对外分发前手动确认 {SOURCE_RELEASE_TAG} 上有这两个资产")
+        return
+
+    got = {a.get("name"): a.get("size", 0) for a in data.get("assets", [])}
+    gone = [n for n in want if n not in got]
+    if gone:
+        print(f"             🔴 release {SOURCE_RELEASE_TAG} 上缺 "
+              f"{', '.join(gone)} —— GPL 源码承诺没兑现，别对外分发")
+        return
+    # 光有文件名不够 —— 上传被截断会留个短文件，名字照样在。
+    # 实测过一次：下载少了 195495 字节，哈希直接对不上。
+    bad = []
+    for n in want:
+        local = os.path.join(ROOT, "dist-src", n)
+        if os.path.isfile(local) and got[n] != os.path.getsize(local):
+            bad.append(f"{n}（远端 {got[n]} vs 本地 {os.path.getsize(local)}）")
+    if bad:
+        print(f"             🔴 release 上 {'; '.join(bad)} 大小不符 —— "
+              "疑似上传被截断，重传")
+        return
+    print(f"             ✓ release {SOURCE_RELEASE_TAG} 上两个源码资产都在，"
+          "大小与本地一致")
 
 
 def main():
