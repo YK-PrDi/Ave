@@ -136,6 +136,38 @@ def render(clips, voice_audio, subs, out_path, ffmpeg,
     return out_path
 
 
+def respeed(src, out_path, speed, ffmpeg, encoder=None):
+    """把已渲好的成品整条变速，画面和声音同步。
+
+    用户 2026-08-26 定：「整个视频出来之后，再过一遍前端的倍速，然后再导出」。
+    所以这是**渲染完之后的独立一步**，不在 `render()` 里烘焙 ——
+    这样改倍速不用重渲（全量重渲要 9 分钟）。
+
+    画面走 `setpts=PTS/speed`，声音走 `atempo=speed`。
+    **atempo 是变速不变调**，所以人声不会变成快进腔；用 `asetrate` 就会。
+
+    ⚠️ `atempo` 单个实例只接受 0.5~2.0（不是 `apply_atempo` 那里说的 0.5~100，
+    那个上限是多实例串联才有的）。超出要串联多个，这里直接拒绝 ——
+    界面已把倍速限死 0.5~2.0。
+    """
+    if not 0.5 <= speed <= 2.0:
+        raise RuntimeError(
+            f"倍速 {speed} 超出 atempo 单实例范围 0.5~2.0")
+    encoder = encoder or pick_encoder(ffmpeg)
+    r = subprocess.run(
+        [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", src,
+         "-filter_complex",
+         f"[0:v]setpts=PTS/{speed:.6f}[v];[0:a]atempo={speed:.6f}[a]",
+         "-map", "[v]", "-map", "[a]",
+         "-c:v", encoder, "-b:v", "6M",
+         "-c:a", "aac", "-b:a", "128k",
+         "-r", "24", "-pix_fmt", "yuv420p", out_path],
+        capture_output=True, text=True, errors="ignore")
+    if r.returncode != 0 or not os.path.isfile(out_path):
+        raise RuntimeError(f"变速导出失败:\n{r.stderr[-1200:]}")
+    return out_path
+
+
 def concat_audio(parts, out_path, ffmpeg):
     """把多段配音按顺序拼成一条音轨。"""
     cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]

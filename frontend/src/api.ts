@@ -211,6 +211,15 @@ export const api = {
     }),
   copyGenerate: (source?: string) =>
     post<{ id: string }>('/copy/generate', { source }),
+
+  // ---- 导出（渲染完之后整条变速，不覆盖原片）----
+  // 用户 2026-08-26 定：整个视频出来之后再过一遍前端的倍速，然后导出
+  exportOutputs: (p: {
+    speed: number
+    names?: string[]
+    out_dir?: string
+    sub_dir?: string
+  }) => post<{ id: string; out_dir: string; total: number }>('/export', p),
   visionTest: (source?: string) =>
     post<{
       ok: boolean

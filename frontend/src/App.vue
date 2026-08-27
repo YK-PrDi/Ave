@@ -276,6 +276,7 @@ onUnmounted(() => unsubscribe?.())
       :dir="outputsDir"
       :loading="loadingOutputs"
       :out-dir="outDir"
+      :speed="speed"
       @refresh="loadOutputs"
       @deleted="loadOutputs"
     />

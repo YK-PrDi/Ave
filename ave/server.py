@@ -19,6 +19,7 @@
     POST /api/copy/save           存人工改过的文案
     POST /api/copy/generate       批量生成文案，返回 job_id（复用 SSE）
     POST /api/vision/test         视觉接口自检，真发一次请求
+    POST /api/export              成品整条变速导出到子目录，返回 job_id（复用 SSE）
 
 只监听 127.0.0.1，不对外暴露。这是本机工具，不做鉴权。
 """
@@ -638,6 +639,111 @@ def copy_generate(req: CopyReq):
     JOBS[job.id] = job
     threading.Thread(target=job.run, daemon=True).start()
     return {"id": job.id}
+
+
+class ExportReq(BaseModel):
+    # 整体倍速。1.0 = 原样拷贝（仍会重编码，但不变速）
+    speed: float = 1.2
+    # 要导出哪些成品。None/空 = 全部
+    names: list[str] | None = None
+    out_dir: str | None = None
+    # 导出落在 out_dir 下的子目录，默认按倍速命名
+    sub_dir: str | None = None
+
+
+@app.post("/api/export")
+def export_outputs(req: ExportReq):
+    """把已渲好的成品整条变速后导出到子目录。
+
+    用户 2026-08-26 定：「整个视频出来之后，再过一遍前端的倍速，然后再导出」。
+    **不覆盖原片** —— 落 `out_dir/导出_1.2x/`，改倍速不用重渲
+    （全量重渲要 9 分钟，变速一条只要 1.4 秒）。
+
+    走 Job/SSE，进度条和停止按钮复用渲染那套。
+    """
+    if not 0.5 <= req.speed <= 2.0:
+        raise HTTPException(
+            400, f"倍速 {req.speed} 超出范围 —— atempo 单实例只接受 0.5~2.0")
+    if any(j.status == "running" for j in JOBS.values()):
+        raise HTTPException(409, "已有任务在跑，请等它结束或先停止")
+
+    src_dir = os.path.realpath(req.out_dir or config.OUTPUT_DIR)
+    if not os.path.isdir(src_dir):
+        raise HTTPException(400, f"目录不存在: {src_dir}")
+
+    # 挑要导的文件。逐个走 _safe_output_file 把路径限死在输出目录内。
+    if req.names:
+        picked = [_safe_output_file(n, src_dir) for n in req.names]
+    else:
+        picked = [os.path.join(src_dir, f) for f in sorted(os.listdir(src_dir))
+                  if f.lower().endswith(".mp4")]
+    if not picked:
+        raise HTTPException(400, "没有可导出的成品")
+
+    sub = req.sub_dir or f"导出_{req.speed:g}x"
+    # 子目录名不许带路径成分，否则能写到输出目录外面去
+    if os.path.basename(sub) != sub or sub in (".", ".."):
+        raise HTTPException(400, "子目录名不合法")
+    dst_dir = os.path.join(src_dir, sub)
+
+    def target(on_event, should_stop):
+        import shutil as _sh
+        from ave import render as _r
+        os.makedirs(dst_dir, exist_ok=True)
+        enc = _r.pick_encoder(config.FFMPEG)
+        total = len(picked)
+        on_event({"type": "start", "total": total, "speed": req.speed,
+                  "out_dir": dst_dir, "encoder": enc})
+        ok = failed = 0
+        for i, src in enumerate(picked, 1):
+            if should_stop():
+                on_event({"type": "stopped", "done": ok, "total": total})
+                break
+            name = os.path.basename(src)
+            dst = os.path.join(dst_dir, name)
+            ev = {"type": "item", "index": i, "total": total, "file": name}
+            t0 = time.time()
+            try:
+                if abs(req.speed - 1.0) < 0.001:
+                    _sh.copy2(src, dst)     # 1.0 不重编码，直接拷
+                else:
+                    _r.respeed(src, dst, req.speed, config.FFMPEG, encoder=enc)
+                ok += 1
+                ev.update(ok=True,
+                          size_mb=round(os.path.getsize(dst) / 1e6, 1),
+                          seconds=round(time.time() - t0, 1))
+            except (RuntimeError, OSError) as e:
+                failed += 1
+                ev.update(ok=False, error=str(e)[:300])
+            on_event(ev)
+
+        # 清单一并拷过去，成品的组合明细在导出目录里也查得到
+        try:
+            items = pipeline.read_manifest(src_dir)
+            keep = {os.path.basename(p): items[os.path.basename(p)]
+                    for p in picked if os.path.basename(p) in items}
+            if keep:
+                for v in keep.values():
+                    v["export_speed"] = req.speed
+                mp = pipeline.manifest_path(dst_dir)
+                tmp = mp + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    import json as _j
+                    _j.dump({"version": 1, "items": keep}, f,
+                            ensure_ascii=False, indent=1)
+                os.replace(tmp, mp)
+        except (OSError, ValueError):
+            pass    # 清单拷不过去不该让导出算失败
+
+        result = {"ok": ok, "failed": failed, "total": total,
+                  "speed": req.speed, "out_dir": dst_dir}
+        on_event({"type": "done", **result})
+        return result
+
+    job = Job(target=target, kind="export")
+    JOBS[job.id] = job
+    threading.Thread(target=job.run, daemon=True).start()
+    return {"id": job.id, "out_dir": dst_dir, "total": len(picked)}
 
 
 @app.post("/api/vision/test")
