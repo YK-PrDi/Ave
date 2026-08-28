@@ -38,6 +38,16 @@ web/
 # **别删** —— 要传到 release 的必须是这两个文件本身。
 dist-src/
 
+# 凭证。**永不进版本库** —— 仓库是公开的，TTS 和方舟 API Key 都带计费，
+# 一旦提交就等于把别人的钱包挂在网上（且 git 历史删不干净，要重写历史）。
+# 正常位置是 `%LOCALAPPDATA%\Ave\credentials.json`（仓库外），
+# 这几条是防手滑：有人图方便拷进项目根、或打包时临时放一份。
+credentials.json
+credentials*.json
+*credentials.json
+.env
+.env.*
+
 # Python
 __pycache__/
 *.py[cod]

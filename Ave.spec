@@ -50,6 +50,29 @@ datas += [
     ("web", "web"),
 ]
 
+# 随包凭证（用户 2026-08-27 定：内部使用，免得每台机器手配）。
+# `打包.bat` 打包前从 `%LOCALAPPDATA%\Ave\credentials.json` 拷成这个名字。
+#
+# 🔴 **明文，拿到 dist\Ave 的人都能提取出 token**。PyInstaller 的 datas 不加密。
+#   · 仅限内部分发；对外发布前删掉这行 + 那个文件，回落成每机一份用户凭证
+#   · 落包根（`"."` → `_internal/`），**不准放 web/** ——
+#     那目录被 StaticFiles 对外挂，会变成 http://127.0.0.1:8756/... 直接可下
+#   · 文件名带 `credentials` 是刻意的：.gitignore 有 `credentials*.json` 规则，
+#     故意让它落进那条拦截里，防手滑提交
+#
+# 条件加：文件不在也能正常打包（回落成每机一份用户凭证），不硬失败。
+import os as _os
+
+_CRED_BUNDLE = "_bundled_credentials.json"
+if _os.path.isfile(_CRED_BUNDLE):
+    datas += [(_CRED_BUNDLE, ".")]
+    # ⚠ print 只用 ASCII —— spec 是被 PyInstaller exec 的，走 GBK 控制台，
+    # 打中文或 ✓ ⚠ 这类字符会 UnicodeEncodeError 直接崩在解析阶段
+    # 【实测 2026-08-27，铁律 2 的同一个坑】。
+    print("[Ave.spec] bundling credentials -- INTERNAL DISTRIBUTION ONLY")
+else:
+    print("[Ave.spec] no bundled credentials, using per-machine user dir")
+
 # ⚠️ 别试图从 av.libs 里剔掉 libx264/libx265 来「去掉 GPL 依赖」。
 # 实测：这两个 DLL 在 avcodec 的 **load-time import 表**（.idata）里，
 # 不是 delay-load。移走后 avcodec 直接加载失败

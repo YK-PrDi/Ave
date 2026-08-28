@@ -22,22 +22,33 @@ if not exist "licensesfmpeg\SOURCE-OFFER.md" (
   pause & exit /b 1
 )
 
-echo [1/4] 检查随包素材...
+echo [1/5] 检查随包素材...
 python 准备素材.py --check || (echo [错误] 素材检查未通过 & pause & exit /b 1)
 
-echo [2/4] 构建前端...
+echo [2/5] 构建前端...
 cd frontend
 call npm run build || (echo [错误] 前端构建失败 & cd .. & pause & exit /b 1)
 cd ..
 
-echo [3/4] 复制前端产物到 web\...
+echo [3/5] 复制前端产物到 web\...
 if exist "web" rd /s /q "web"
 xcopy /e /i /q "frontend\dist" "web\" >nul || (echo [错误] 复制失败 & pause & exit /b 1)
 rem 许可声明也拷进 web，界面页脚的「开源许可」链接指向这里
 xcopy /e /i /q "licenses" "web\licenses\" >nul || (echo [错误] 复制许可失败 & pause & exit /b 1)
 
-echo [4/4] PyInstaller 打包 (约 3-8 分钟)...
+echo [4/5] 复制凭证到包内 (内部使用)...
+rem 用户 2026-08-27 定：内部使用，凭证打进 exe，免得每台机器手配一遍。
+rem 明文，拿到 dist\Ave 的人都能提取出 token —— 对外分发前必须去掉这一步。
+rem 打包完会删掉，不让明文凭证长期躺在仓库目录里。
+set "CRED=%LOCALAPPDATA%\Ave\credentials.json"
+if exist "%CRED%" copy /y "%CRED%" "_bundled_credentials.json" >nul
+if exist "_bundled_credentials.json" (echo         已打入凭证，仅限内部分发) else (echo         无凭证，走每台机器一份用户数据目录)
+
+echo [5/5] PyInstaller 打包 (约 3-8 分钟)...
 python -m PyInstaller --noconfirm --clean Ave.spec || (echo [错误] 打包失败 & pause & exit /b 1)
+
+rem 清掉刚拷进来的明文凭证 —— 它已经在 exe 里了，仓库目录不留副本
+if exist "_bundled_credentials.json" del /q "_bundled_credentials.json"
 
 echo.
 echo ============================================

@@ -299,24 +299,52 @@ SUBTITLE_SHADOW = True   # 需求要求带阴影
 
 CREDENTIALS_FILE = os.path.join(_USER_DIR, "credentials.json")
 
+# 随包凭证（用户 2026-08-27 定：内部使用，免得每台机器手配一遍）。
+# 打包时 `打包.bat` 把用户目录那份拷成 `_bundled_credentials.json` 打进包里，
+# 由 `Ave.spec` 的 datas 落到 `_internal/`。
+#
+# 🔴 **这是明文，拿到 dist\Ave 文件夹的人都能提取出 token**。
+# PyInstaller 的 datas 不加密，改个后缀就能读。所以：
+#   · 仅限内部分发。对外发布前必须删掉这份，回落成每机一份用户凭证
+#   · **永不进版本库** —— .gitignore 已拦 credentials*.json；
+#     文件名故意带 `credentials` 就是为了落进那条规则
+#   · **不能放 web/** —— 那目录被 StaticFiles 对外挂，会变成
+#     http://127.0.0.1:8756/_bundled_credentials.json 直接可下
+BUNDLED_CREDENTIALS_FILE = _resource("_bundled_credentials.json")
 
-def _load_credentials():
-    """读用户数据目录的凭证。文件不存在或坏了都返回空表，不抛异常 ——
+
+def _read_json(path):
+    """读一个 json 表。不存在或坏了都返回空表，不抛 ——
     没凭证只是回落 stub 静音，不该让 import config 就崩。"""
     try:
         import json
-        with open(CREDENTIALS_FILE, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             d = json.load(f)
         return d if isinstance(d, dict) else {}
     except (OSError, ValueError):
         return {}
 
 
+def _load_credentials():
+    """合并两处凭证：用户数据目录优先，随包的兜底。
+
+    这个顺序是刻意的 —— 各公司把自己的 json 放用户目录就能盖掉随包那份，
+    不用重新打包。逐键合并而不是整表二选一：随包给了 4 项、
+    用户只想换音色时，只覆盖 VOLCANO_VOICE 一项即可。
+    """
+    merged = dict(_read_json(BUNDLED_CREDENTIALS_FILE))
+    merged.update(_read_json(CREDENTIALS_FILE))
+    return merged
+
+
 _CRED = _load_credentials()
 
 
 def _cred(key, default=""):
-    """环境变量优先，其次 credentials.json，最后默认值。"""
+    """取一项凭证。优先级：环境变量 > 用户目录 json > 随包 json > 默认值。
+
+    （后两级的合并在 `_load_credentials()` 里做完了。）
+    """
     return os.environ.get(f"AVE_{key}") or _CRED.get(key) or default
 
 
