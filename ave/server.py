@@ -558,6 +558,7 @@ def copy_list(req: CopyReq):
         "source": src,
         "vision_backend": config.VISION_BACKEND,
         "vision_model": config.ARK_VISION_MODEL,
+        "vision_models": list(config.ARK_VISION_MODELS),
         "items": items,
     }
 

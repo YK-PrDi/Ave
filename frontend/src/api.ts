@@ -49,6 +49,7 @@ export interface CopyList {
   source: string
   vision_backend: string
   vision_model: string
+  vision_models?: string[]
   items: CopyItem[]
 }
 
@@ -229,6 +230,8 @@ export const api = {
       ok: boolean
       backend: string
       model?: string
+      models?: string[]
+      note?: string
       reply?: string
       error?: string
       with_image?: boolean

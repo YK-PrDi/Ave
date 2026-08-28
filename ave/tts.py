@@ -128,6 +128,37 @@ class StubBackend:
         return os.path.isfile(out_path)
 
 
+def _explain_tts_error(code, detail):
+    """把服务端错误翻成运营看得懂的一句话，后面附原文。
+
+    运营看不懂 `AccountOverdueError` 和一串英文 —— 直接说该去做什么。
+    原文保留在后面，排查时还是要它。
+    """
+    hints = [
+        ("AccountOverdueError", "账户欠费，去火山引擎控制台结清后重试"),
+        ("overdue", "账户欠费，去火山引擎控制台结清后重试"),
+        # ⚠️ 这条字面是「资源未授权」，**但实测多半是欠费**：
+        # 2026-08-28 欠费期间报的就是它（resource_id=volc.seedtts.default），
+        # 结清后同一套凭证、同一个音色原样就通了。
+        # 所以提示**先让人查余额**，别一上来就去翻音色授权列表。
+        ("not granted", "账户欠费或服务被停（实测欠费也报这个）。"
+                        "先去控制台查余额结清；余额正常再看语音合成服务"
+                        "是否开通、VOLCANO_VOICE 是否在已授权音色里"),
+        ("Quota", "额度用尽或超配额，去控制台查用量"),
+        ("authenticate", "凭证无效，检查 credentials.json 的 "
+                         "VOLCANO_APPID / VOLCANO_TOKEN"),
+        ("Forbidden", "凭证无权限或账户异常（欠费/未开通），"
+                      "去火山引擎控制台确认"),
+    ]
+    for needle, msg in hints:
+        if needle.lower() in (detail or "").lower():
+            return f"{msg}。原文: {detail[:300]}"
+    if code == 403:
+        return ("账户异常或凭证无权限（常见是欠费/未开通），"
+                f"去火山引擎控制台确认。原文: {detail[:300]}")
+    return detail[:400] or f"HTTP {code}，无错误详情"
+
+
 class VolcanoBackend:
     """火山引擎大模型语音合成。
 
@@ -182,10 +213,26 @@ class VolcanoBackend:
                         build_req(), timeout=self.TIMEOUT) as resp:
                     body = json.loads(resp.read().decode("utf-8"))
                 break
+            except urllib.error.HTTPError as e:
+                # ⚠️ **这个 except 必须排在 URLError 前面** ——
+                # `HTTPError` 是 `URLError` 的子类，写反了永远进不来，
+                # 403 会被当成网络抖动白重试 3 次（等 4.5 秒退避），
+                # 且服务端错误原文被吞掉，用户只看到「调用失败」
+                # 看不出真因【2026-08-28 实测：欠费 403 就是这样被埋掉的】。
+                detail = ""
+                try:
+                    detail = e.read().decode("utf-8", "replace")[:600]
+                except OSError:
+                    pass
+                if 400 <= e.code < 500:
+                    raise RuntimeError(
+                        f"火山引擎 TTS 返回 {e.code}: "
+                        f"{_explain_tts_error(e.code, detail)}") from e
+                last = RuntimeError(f"火山引擎 TTS {e.code}: {detail}")
             except (urllib.error.URLError, ValueError, OSError) as e:
                 last = e
-                if attempt + 1 < self.RETRIES:
-                    time.sleep(self.BACKOFF * (2 ** attempt))
+            if attempt + 1 < self.RETRIES:
+                time.sleep(self.BACKOFF * (2 ** attempt))
         else:
             raise RuntimeError(
                 f"火山引擎 TTS 调用失败（重试 {self.RETRIES} 次）: {last}"

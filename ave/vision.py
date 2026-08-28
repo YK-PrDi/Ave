@@ -173,6 +173,10 @@ class ArkVisionBackend:
     走 `chat/completions`，图片以 `data:image/jpeg;base64,...` 内联传入
     （单张 <10MB、请求体 <64MB，我们抽 3 帧 512 宽，量级远低于上限）。
     形态取自方舟官方文档《图片理解》的示例。
+
+    **多模型降级**：`models` 按顺序试（默认价格升序，见
+    `config._DEFAULT_VISION_MODELS`），只在可降级错误时切下一个 ——
+    欠费 / 未开通 / 限流 / 5xx。其他 4xx 直接抛，换模型一样错。
     """
 
     name = "ark"
@@ -181,12 +185,26 @@ class ArkVisionBackend:
     RETRIES = 3
     BACKOFF = 1.5         # 指数退避：1.5s → 3.0s。同 tts.VolcanoBackend
 
-    def __init__(self, api_key, model, endpoint=None):
-        self.api_key = api_key
-        self.model = model
-        self.endpoint = endpoint or self.ENDPOINT
+    # 这些**换个模型就可能好**，所以降级；其余 4xx 是我们自己的请求有问题。
+    FALLBACK_CODES = ("AccountOverdueError", "ModelNotOpen",
+                      "InvalidEndpointOrModel.NotFound",
+                      "QuotaExceeded", "RateLimitExceeded")
 
-    def _payload(self, frames, prompt, max_tokens=400):
+    def __init__(self, api_key, models, endpoint=None):
+        if isinstance(models, str):
+            models = [models]
+        self.api_key = api_key
+        self.models = [m for m in (models or []) if m]
+        if not self.models:
+            raise ValueError("ArkVisionBackend 需要至少一个模型 ID")
+        # 当前生效的那个。`ping()` 和 server 的 vision_model 字段要读它，
+        # 降级成功后会指向实际用成的模型。
+        self.model = self.models[0]
+        self.endpoint = endpoint or self.ENDPOINT
+        # 降级轨迹，给 /api/vision/test 显示。每次调用前清空。
+        self.note = ""
+
+    def _payload(self, frames, prompt, max_tokens=400, model=None):
         content = []
         for f in frames:
             with open(f, "rb") as fh:
@@ -194,7 +212,7 @@ class ArkVisionBackend:
             content.append({"type": "image_url",
                             "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
         content.append({"type": "text", "text": prompt})
-        return {"model": self.model,
+        return {"model": model or self.model,
                 "messages": [{"role": "user", "content": content}],
                 "max_tokens": max_tokens,
                 # 关掉深度思考。Doubao-Seed 系列默认会先「思考」，
@@ -204,11 +222,27 @@ class ArkVisionBackend:
                 # 取值 enabled / disabled / auto（方舟 Chat API 文档）。
                 "thinking": {"type": "disabled"}}
 
+    @staticmethod
+    def _err_code(detail):
+        """从方舟的错误 body 里取 `error.code`。取不到返回空串。
+
+        **按 code 判降级，不按 HTTP 码猜** —— 403 既可能是欠费（换模型没用，
+        但要让链条走完才好报错）也可能是 Key 无效，404 既可能是未开通
+        也可能是 ID 不存在，光看数字分不出来。
+        """
+        try:
+            return (json.loads(detail).get("error") or {}).get("code", "")
+        except (ValueError, AttributeError):
+            return ""
+
     def _post(self, payload):
         """发一次请求，返回 (assistant 文本, 原始响应)。失败抛 RuntimeError。
 
         重试形态照 `tts.VolcanoBackend`：实测 TTS 有 0.4% 读超时，
         视觉请求体大得多，没有重试同样会让整条出片失败。
+
+        4xx 抛出的 RuntimeError 带 `.err_code` / `.http_code` 属性，
+        供 `_post_with_fallback()` 判断该不该降级。
         """
         import urllib.error
         import urllib.request
@@ -234,9 +268,14 @@ class ArkVisionBackend:
                 except OSError:
                     pass
                 if 400 <= e.code < 500:
-                    raise RuntimeError(
-                        f"方舟视觉接口返回 {e.code}: {detail}") from e
+                    err = RuntimeError(
+                        f"方舟视觉接口返回 {e.code}: {detail}")
+                    err.err_code = self._err_code(detail)
+                    err.http_code = e.code
+                    raise err from e
                 last = RuntimeError(f"方舟视觉接口 {e.code}: {detail}")
+                last.err_code = self._err_code(detail)
+                last.http_code = e.code
             except (urllib.error.URLError, ValueError, OSError) as e:
                 last = e
             if attempt + 1 < self.RETRIES:
@@ -259,13 +298,54 @@ class ArkVisionBackend:
                           if isinstance(p, dict))
         return (txt or "").strip(), body
 
+    def _should_fallback(self, exc):
+        """该不该换下一个模型。可降级 = 换个模型有希望成。"""
+        code = getattr(exc, "err_code", "") or ""
+        http = getattr(exc, "http_code", 0) or 0
+        if code in self.FALLBACK_CODES:
+            return True
+        # 限流和服务端故障没有稳定的 code，按 HTTP 码兜。
+        return http in (429,) or 500 <= http < 600
+
+    def _post_with_fallback(self, payload_fn):
+        """顺着 `self.models` 试，可降级错误才切下一个。
+
+        `payload_fn(model)` 每次用**当前模型 ID** 重建 payload ——
+        payload 里带 `"model"` 字段，只换变量不重建就会一直打第一个模型。
+        """
+        self.note = ""
+        tried = []
+        last = None
+        for i, model in enumerate(self.models):
+            try:
+                txt, body = self._post(payload_fn(model))
+            except RuntimeError as e:
+                tried.append(f"{model} ✗ {str(e)[:120]}")
+                last = e
+                if i + 1 < len(self.models) and self._should_fallback(e):
+                    continue
+                # 不可降级，或已是最后一个 —— 把试过的都写进 note 再抛
+                if len(tried) > 1:
+                    self.note = "；".join(tried)
+                    raise RuntimeError(
+                        f"{len(tried)} 个模型全部失败：" + " | ".join(tried)
+                    ) from e
+                raise
+            self.model = model
+            if i:      # 降级过才记，正常路径不留噪音
+                self.note = ("；".join(tried)
+                             + f"；已降级到 {model}")
+            return txt, body
+        raise RuntimeError(f"没有可用模型: {last}")
+
     def write_copy(self, frames, role="point", desc="", max_chars=40,
                    min_chars=None):
         """看图写口播。frames 为空则返回空串（调用方回落静音占位）。"""
         if not frames:
             return ""
         prompt = build_prompt(role, desc, max_chars, min_chars)
-        txt, _body = self._post(self._payload(frames, prompt))
+        txt, _body = self._post_with_fallback(
+            lambda m: self._payload(frames, prompt, model=m))
         out = clean_copy(txt)
         # 超字数不重试 —— 再问一次多半还是超，且贵。TTS 那边本来就会
         # 用 atempo 压（铁律 8 允许加速，只是可能听出变速），交给它。
@@ -275,28 +355,36 @@ class ArkVisionBackend:
         """连通性自检。返回 {'ok':bool,'model':..,'reply':..,'error':..}。
 
         真发一次请求 —— 只校验 Key 字符串非空说明不了任何事。
+        走降级链，所以「首选欠费但备选可用」会如实报成 ok + note。
         """
         try:
             if frames:
-                txt, body = self._post(
-                    self._payload(frames, "用一句话描述这张图里的物品。"),
-                    )
+                txt, body = self._post_with_fallback(
+                    lambda m: self._payload(
+                        frames, "用一句话描述这张图里的物品。", model=m))
             else:
-                txt, body = self._post(
-                    {"model": self.model,
-                     "messages": [{"role": "user", "content": "回复「ok」两个字"}],
-                     "max_tokens": 16})
+                txt, body = self._post_with_fallback(
+                    lambda m: {"model": m,
+                               "messages": [{"role": "user",
+                                             "content": "回复「ok」两个字"}],
+                               "max_tokens": 16})
             return {"ok": True, "model": self.model, "reply": txt[:300],
-                    "usage": body.get("usage")}
+                    "usage": body.get("usage"), "models": list(self.models),
+                    "note": self.note}
         except RuntimeError as e:
-            return {"ok": False, "model": self.model, "error": str(e)[:800]}
+            return {"ok": False, "model": self.model, "error": str(e)[:800],
+                    "models": list(self.models), "note": self.note}
 
 
-def make_backend(api_key=None, model=None):
+def make_backend(api_key=None, model=None, models=None):
     """按凭证有无自动选后端。与 `config._tts_backend()` 同一思路 ——
-    不让人再改一个开关，否则「填了 Key 但忘了改开关」会静默不生效。"""
+    不让人再改一个开关，否则「填了 Key 但忘了改开关」会静默不生效。
+
+    `model` 传单个时就只用它（不降级），保留是为了兼容老调用点。
+    """
     from ave import config
     key = api_key if api_key is not None else config.ARK_API_KEY
     if not key:
         return StubVisionBackend()
-    return ArkVisionBackend(key, model or config.ARK_VISION_MODEL)
+    chain = models or ([model] if model else None) or config.ARK_VISION_MODELS
+    return ArkVisionBackend(key, chain)

@@ -6,7 +6,7 @@
 faster-whisper==1.2.1
 
 # 字幕渲染成透明 PNG
-pillow==12.0.0
+pillow==12.3.0
 
 # 本地 HTTP 服务，给 Vue3 界面调用
 fastapi==0.141.1

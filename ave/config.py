@@ -348,6 +348,21 @@ def _cred(key, default=""):
     return os.environ.get(f"AVE_{key}") or _CRED.get(key) or default
 
 
+def _cred_list(key):
+    """取一项**列表**凭证。收两种写法：json 数组，或逗号分隔字符串。
+
+    环境变量只能是字符串，所以逗号那种形态必须支持
+    （`AVE_ARK_VISION_MODELS=a,b,c`）。json 里两种都行。
+    取不到返回空列表，由调用方决定回落。
+    """
+    raw = os.environ.get(f"AVE_{key}") or _CRED.get(key)
+    if not raw:
+        return []
+    if isinstance(raw, (list, tuple)):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return [s.strip() for s in str(raw).split(",") if s.strip()]
+
+
 VOLCANO_APPID = _cred("VOLCANO_APPID")
 VOLCANO_TOKEN = _cred("VOLCANO_TOKEN")
 VOLCANO_CLUSTER = _cred("VOLCANO_CLUSTER", "volcano_tts")
@@ -375,22 +390,25 @@ TTS_BACKEND = _tts_backend()
 # 不能用于视觉模型，方舟走 API Key 鉴权。同样放 credentials.json：
 #
 #     %LOCALAPPDATA%\Ave\credentials.json
-#     { "ARK_API_KEY": "...", "ARK_VISION_MODEL": "doubao-seed-2-0-mini-260428" }
+#     { "ARK_API_KEY": "...",
+#       "ARK_VISION_MODELS": "doubao-seed-2-0-lite-260428,doubao-seed-2-1-turbo-260628" }
 #
-# `ARK_VISION_MODEL` 可省，省则用下面的默认值。开通步骤见
-# docs/资源需求清单.md。环境变量 AVE_ARK_API_KEY / AVE_ARK_VISION_MODEL 优先。
+# `ARK_VISION_MODELS` 可省，省则用下面的默认链。开通步骤见
+# docs/资源需求清单.md。环境变量 AVE_ARK_API_KEY / AVE_ARK_VISION_MODELS 优先。
 #
 # 模型 ID 会随方舟上线新版本变动，所以做成可配 —— 界面的
 # 「测试视觉接口」按钮会把方舟的错误原文显示出来，改这里不用改代码。
 #
-# **默认选 `doubao-seed-evolving`**（2026-08-26 实探后定：本账号已开通且实测出文案）。
-#   ⚠️ 它是**滚动别名** —— 实测解析到 `doubao-seed-evolving-latest-version`，
-#   方舟会持续换后面那个真实版本。好处是不用跟着改，坏处是效果可能悄悄漂移，
-#   文案质量突然变化时先怀疑这里。
+# **多模型降级链，顺序即优先级**（2026-08-28 用户定「便宜优先 + 失败降级」）：
+#   顺着列表试，只在**可降级错误**（欠费 / 未开通 / 限流 / 5xx）时切下一个。
+#   其他 4xx（prompt 或参数错）直接抛 —— 换模型一样错，换了纯浪费额度。
+#   ⚠️ **默认按价格升序排**，不是随便排的。pro 比 lite 贵 10 倍，
+#   「真轮询」（逐条轮换均摊）平均单价比一直用 lite 高约 5 倍，所以不做轮询。
 #
-# ⚠️ **换模型前先确认账号开通了**。实探 23 个 ID，在售的 `doubao-seed-2-*`
-#   全部返回 `ModelNotOpen`（ID 对但没开通）。两种 404 含义不同：
-#     ModelNotOpen                     ID 正确、模型存在，账号没开通 → 去开通页
+# ⚠️ **换模型前先确认账号开通了**。`GET /api/v3/models` 能列出账号可见模型，
+#   比翻控制台快。三种错误含义不同，别搞混：
+#     AccountOverdueError              ID 对、已开通，**账户欠费** → 去控制台结清
+#     ModelNotOpen                     ID 对、模型存在，账号没开通 → 去开通页
 #     InvalidEndpointOrModel.NotFound  ID 压根解析不了（别名或已退役）→ 换 ID
 #
 # ⚠️ **除 evolving 外都必须带日期后缀**。不带日期的别名
@@ -399,6 +417,13 @@ TTS_BACKEND = _tts_backend()
 # ⚠️ **不要用 `doubao-seed-1-6`** —— 它和 `1-6-flash` / `1-6-vision` / `1-8` /
 #   `1-5-vision-pro` 官方标 `Retiring`，实探全部 `NotFound`。曾拿它当默认，是错的。
 #
+# ⚠️ **`doubao-seed-evolving` 本账号没开通**（2026-08-28 实探 `ModelNotOpen`）。
+#   它是滚动别名、效果会悄悄漂移，不适合当默认，别再往回改。
+#
+# 2026-08-28 实探：下面这三个 ID 账号**可见且已开通**，当时全部返回
+# `AccountOverdueError`（账户欠费，非未开通 —— 早前注释说
+# 「在售 seed-2-* 全部 ModelNotOpen」已不成立）。
+#
 # 开通后可选的在售视觉档（元/百万 token，输入/输出）：
 #   2-0-mini-260428 0.2/2.0 · 2-0-lite-260428 0.6/3.6 · 2-1-turbo-260628 3.0/15
 #   2-0-pro-260215 3.2/16 · 2-1-pro-260628 6.0/30
@@ -406,11 +431,23 @@ TTS_BACKEND = _tts_backend()
 # ⚠️ **Seedance / Seedream / seed3d 不能用** —— 那些是**生成**模型
 #   （文生视频 / 图片生成），Seedance 正是产出我们素材的那个。
 #   我们要的是反方向：看图输出文字。
-#
-# `GET /api/v3/models` 能列出账号可见模型（带 status 字段），比翻控制台快。
 
 ARK_API_KEY = _cred("ARK_API_KEY")
-ARK_VISION_MODEL = _cred("ARK_VISION_MODEL", "doubao-seed-2-0-lite-260428")
+
+# 默认降级链，价格升序。单值的 `ARK_VISION_MODEL` 仍受支持 ——
+# 老 credentials.json 只填了那一项的机器不能挂（填了就只用它，不降级）。
+_DEFAULT_VISION_MODELS = [
+    "doubao-seed-2-0-lite-260428",      # 0.6 / 3.6
+    "doubao-seed-2-1-turbo-260628",     # 3.0 / 15
+    "doubao-seed-2-1-pro-260628",       # 6.0 / 30
+]
+
+_single = _cred("ARK_VISION_MODEL")
+ARK_VISION_MODELS = (_cred_list("ARK_VISION_MODELS")
+                     or ([_single] if _single else _DEFAULT_VISION_MODELS))
+
+# 当前首选。保留这个名字是为了不动 `server.py` 的响应字段和前端展示。
+ARK_VISION_MODEL = ARK_VISION_MODELS[0]
 
 
 def _vision_backend():
