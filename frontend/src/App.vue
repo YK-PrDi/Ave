@@ -131,12 +131,19 @@ onMounted(async () => {
     speed.value = h.defaults.speed
     // 旧后端没这个字段，?? 兜住 —— 否则滑块会变成 undefined
     bgmVolume.value = h.defaults.bgm_volume ?? bgmVolume.value
-    await doScan()
-    await loadOutputs()
-    await loadVisionState()
+    // 凭证状态优先从 health 拿 —— 它不依赖素材目录，换台机器也准。
+    if (h.vision_backend) visionBackend.value = h.vision_backend
+    if (h.vision_model) visionModel.value = h.vision_model
   } catch (e) {
     error.value = `连不上后端服务，请先运行 python -m ave.server（${e}）`
+    return
   }
+  // ⚠️ 这三步**必须各自独立**，不准串在一个 await 链里。
+  // 原来是 `await doScan(); await loadOutputs(); await loadVisionState()`
+  // 同在一个 try 里 —— 素材目录不存在（换台机器必然发生）会让 doScan 抛错，
+  // 后两步直接被跳过，`visionBackend` 永远停在初始值 'stub'，
+  // 界面于是谎报「未配置方舟 API Key」，而 key 其实好着呢【实测】。
+  await Promise.allSettled([doScan(), loadOutputs(), loadVisionState()])
 })
 
 async function doScan() {

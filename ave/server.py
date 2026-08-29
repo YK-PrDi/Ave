@@ -151,6 +151,14 @@ def health():
         "model": os.path.isdir(config.MODEL_DIR),
         "tts_backend": config.TTS_BACKEND,
         "tts_ready": backend_ready,
+        # 视觉后端也在这里吐一份。**不能只靠 `/api/copy/list`** ——
+        # 那个接口要扫素材目录、目录不存在就 400，于是「换台机器没有那个目录」
+        # 会让前端拿不到凭证状态、`visionBackend` 停在初始值 'stub'，
+        # 界面谎报「未配置方舟 API Key」而 key 其实好着呢【实测】。
+        # 凭证状态与素材目录无关，不该被它连坐。
+        "vision_backend": config.VISION_BACKEND,
+        "vision_model": config.ARK_VISION_MODEL,
+        "vision_models": list(config.ARK_VISION_MODELS),
         # 总数保留 —— HealthBar 在用。分层明细在 bgm 里。
         "bgm_count": len(tracks),
         "bgm": {

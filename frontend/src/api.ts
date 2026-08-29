@@ -6,6 +6,11 @@ export interface Health {
   model: boolean
   tts_backend: string
   tts_ready: boolean
+  // 视觉后端状态也从 health 拿 —— copy/list 依赖素材目录，
+  // 目录不存在时会 400，不能用它判断凭证配没配
+  vision_backend?: string
+  vision_model?: string
+  vision_models?: string[]
   bgm_count: number
   // BGM 分两层：内置随应用更新，自定义在用户数据目录（各公司自己加）
   bgm: {

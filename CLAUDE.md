@@ -124,6 +124,15 @@
    ⚠️ **`_payload()` 必须接 model 参数** —— payload 里带 `"model"` 字段，
    降级时只换实例变量不重建 payload，会一直打第一个模型。
 
+18. **「凭证配没配」这类全局状态只能从 `/api/health` 拿，不准从要扫素材目录的接口拿**。
+   `/api/copy/list` 会 `_clips_of()` → 目录不存在直接 400。前端 `visionBackend`
+   初始值是 `'stub'`，拿不到就停在那，界面**谎报「未配置方舟 API Key」**
+   而 key 其实好着呢【实测：换台机器没有 `D:\Download\分镜` 必然触发】。
+   且 `onMounted` 里 `doScan/loadOutputs/loadVisionState` **必须 `Promise.allSettled`
+   并行**，不准串成一个 `await` 链 —— 串起来时 doScan 抛错会跳过后两步。
+   ⚠️ **界面报「没配 X」先查后端实际返回什么**，别急着改打包或往代码里写死密钥
+   —— 这次差点按「密钥没打进 exe」去动打包脚本，真因是前端没去问。
+
 ## 改动分级
 
 - **大**（碰 `combo.py` 抽样规则、`pipeline.run()` 签名、新增 HTTP 接口）→ 讨论方案 → 计划 → 实现 → `/qa` → 独立 review
