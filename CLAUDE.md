@@ -36,6 +36,11 @@
 
 1. **批处理必须存 GBK**。`启动.bat` / `停止.bat` 存 UTF-8 会中文乱码、`if`/`goto` 流程断裂【实测】。
    改完转回去：`io.open(f,'w',encoding='gbk',newline='\r\n').write(s)`
+   ⚠️ **批处理里的路径要按字节确认，不能只看渲染出来的文本**。`打包.bat` 的
+   `licenses\ffmpeg\...` 曾被写成单个 `0x0C` 换页符（`\f` 被当转义序列吃掉），
+   于是 GPL 许可检查恒失败、打包卡在第 0 步，而目录明明是好的【实测】。
+   同类风险：`\f` `\t` `\n` `\r` `\b` 开头的路径段（`licenses\fonts`、`web\temp`）。
+   查法：`open(f,'rb').read().count(bytes([12]))`。
 2. **CLI 入口必须 reconfigure stdout/stderr 为 UTF-8**。Windows 控制台/管道是 GBK，
    print `⚠ ✓ ✗` 直接 `UnicodeEncodeError` 崩，全量跑不完【实测】。
 3. **字幕走 Pillow 渲 PNG + ffmpeg overlay**，不用 `drawtext`。现方案已端到端验证，
