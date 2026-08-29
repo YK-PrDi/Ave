@@ -41,6 +41,21 @@ const pointsTooMany = computed(
   () => !!props.stats && props.points > props.stats.groups.points,
 )
 
+// 预计耗时。**必须显式告诉用户**：界面只说「39 条」，第一次用的人
+// 不知道那等于要等 50 分钟，点下「开始渲染」就懵了（用户 2026-08-29 反馈
+// 「要测出符合直觉的操作流程」）。
+// 单条约 72 秒 —— 2026-08-17 全量 39 条实测 2869 秒；本轮 2 条 84 秒（含预热）。
+const SEC_PER_CLIP = 72
+const eta = computed(() => {
+  const n = expected.value
+  if (!n) return ''
+  const m = Math.round((n * SEC_PER_CLIP) / 60)
+  if (m < 1) return '不到 1 分钟'
+  if (m < 60) return `约需 ${m} 分钟`
+  const h = Math.floor(m / 60)
+  return `约需 ${h} 小时 ${m % 60} 分钟`
+})
+
 // 倍速超出这个范围画面/语速都会明显失真，提前拦
 const speedBad = computed(() => props.speed < 0.5 || props.speed > 2)
 
@@ -132,6 +147,7 @@ const bgmHint = computed(() => {
       <div v-if="expected !== null" class="out">
         <span>本次将产出</span>
         <b>{{ expected }} 条</b>
+        <em v-if="eta">渲染{{ eta }}</em>
       </div>
     </div>
 
@@ -221,6 +237,11 @@ input.slider {
 }
 .out b {
   font-size: 22px;
+}
+.out em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--dim);
 }
 /* 开关是横排的，覆盖上面 label 的 column 布局 */
 .toggle {

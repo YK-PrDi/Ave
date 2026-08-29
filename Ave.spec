@@ -10,6 +10,8 @@
 （约 18MB）是 data 不是代码，不显式 collect 就会漏 —— 漏了幻觉闸门失效。
 """
 
+import os
+
 from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 datas = []
@@ -49,6 +51,22 @@ datas += [
     ("licenses", "licenses"),
     ("web", "web"),
 ]
+
+# 内置 BGM 层。**必须显式声明，否则包里连 bgm 目录都没有** ——
+# `config.BGM_BUILTIN_DIR = _resource("bgm")` 指向 `_internal/bgm`，
+# 不打进来内置层恒为 0 首。而自定义层在用户数据目录、新机器上是空的，
+# 所以同事拿到包会**一首 BGM 都没有**【实测 2026-08-29】。
+#
+# ⚠️ 仓库 `bgm/` 被 .gitignore 排除（音频不进版本库），所以打包机上
+# 那个目录可能是空的 —— 空目录 PyInstaller 会直接跳过，不报错。
+# 要随包发曲子就先把 mp3 放进仓库 `bgm/`，再打包。
+# 曲子的授权自己负责：内置层界面上不可删，等于随应用分发。
+if os.path.isdir("bgm") and os.listdir("bgm"):
+    datas += [("bgm", "bgm")]
+    print(f"[Ave.spec] bundling {len(os.listdir('bgm'))} builtin BGM track(s)")
+else:
+    print("[Ave.spec] no builtin BGM (repo bgm/ empty) -- "
+          "users must add their own via the UI")
 
 # 随包凭证（用户 2026-08-27 定：内部使用，免得每台机器手配）。
 # `打包.bat` 打包前从 `%LOCALAPPDATA%\Ave\credentials.json` 拷成这个名字。

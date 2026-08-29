@@ -68,3 +68,8 @@ Thumbs.db
 desktop.ini
 .DS_Store
 .gstack/
+
+# 分发压缩包。**里面有明文凭证**（_internal/_bundled_credentials.json），
+# 绝不能进版本库。`打包.bat` 产出 Ave-分发.zip，之前手工打的叫 dist.zip。
+Ave-分发.zip
+*.zip

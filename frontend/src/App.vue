@@ -53,9 +53,17 @@ const loadingOutputs = ref(false)
 // 用来决定 ParamPanel 的开关要不要提示「Key 没配」。
 const visionBackend = ref('stub')
 const visionModel = ref('')
+// BGM 自定义层目录。BgmPanel 里换过文件夹就有值，渲染时作为 bgm_dir 传下去。
+const bgmDir = ref('')
 
 async function refreshHealth() {
   health.value = await api.health().catch(() => health.value)
+}
+
+// BGM 面板改了东西（加/删/换文件夹）。记下目录供渲染用，并刷新顶部计数。
+async function onBgmChanged(dir: string) {
+  bgmDir.value = dir
+  await refreshHealth()
 }
 
 async function loadVisionState() {
@@ -94,6 +102,9 @@ function params() {
     speed: speed.value,
     bgm_volume: bgmVolume.value,
     ai_copy: aiCopy.value,
+    // 用户在 BGM 面板换过文件夹就带上 —— 否则渲染仍用默认目录，
+    // 界面显示的和实际混进片子的不是一批曲子
+    bgm_dir: bgmDir.value || undefined,
   }
 }
 
@@ -257,7 +268,12 @@ onUnmounted(() => unsubscribe?.())
       :vision-backend="visionBackend"
     />
 
+    <!-- 「无口播分镜的 AI 文案」和「组合预览」暂时不展示（用户 2026-08-29）。
+         **只藏界面，后端和相关状态一行没动** —— AI 补口播开关照旧生效、
+         组合方案照旧在渲染时生成，`/api/copy/*` 和 `/api/preview` 也都还在。
+         要恢复把这两段的 v-if="false" 去掉即可。 -->
     <CopyPanel
+      v-if="false"
       :source="source"
       :vision-backend="visionBackend"
       :vision-model="visionModel"
@@ -265,9 +281,10 @@ onUnmounted(() => unsubscribe?.())
       @busy="copyBusy = $event"
     />
 
-    <BgmPanel @changed="refreshHealth" />
+    <BgmPanel @changed="onBgmChanged" />
 
     <PreviewList
+      v-if="false"
       :combos="combos"
       :loading="previewing"
       @refresh="doPreview"

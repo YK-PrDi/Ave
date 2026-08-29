@@ -28,7 +28,7 @@ const PREVIEW_N = 8
     </p>
 
     <template v-else>
-      <ol class="list">
+      <ol class="list" :class="{ capped: showAll }">
         <li
           v-for="c in (showAll ? props.combos : props.combos.slice(0, PREVIEW_N))"
           :key="c.index"
@@ -71,7 +71,14 @@ const PREVIEW_N = 8
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 380px;
+}
+/* ⚠️ **高度上限只在展开时加**。原来 `.list` 恒定 `max-height: 380px;
+   overflow-y: auto`，折叠态 8 条内容就有 552px —— 于是点「收起」框高一点不变
+   （页面总高恒定），视觉上完全看不出区别，用户反馈「收起没反应」，
+   其实条目数真的 39→8 了，只是被同一个 380px 的内滚盒子盖住【实测】。
+   折叠态让 8 条自然铺开，展开态才限高，这样两个状态肉眼可分。 */
+.list.capped {
+  max-height: 60vh;
   overflow-y: auto;
 }
 .list li {

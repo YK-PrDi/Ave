@@ -30,7 +30,9 @@ const emit = defineEmits<{
       <button :disabled="props.picking" @click="emit('pick')">
         {{ props.picking ? '选择中…' : '选择文件夹' }}
       </button>
-      <button :disabled="props.scanning" @click="emit('scan')">
+      <!-- 扫描是必做的第一步，给 primary —— 原来它是普通样式，
+           反而「添加音乐」是 primary，第一次用的人会先点错那个。 -->
+      <button class="primary" :disabled="props.scanning" @click="emit('scan')">
         {{ props.scanning ? '扫描中…' : '扫描' }}
       </button>
     </div>

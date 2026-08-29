@@ -6,16 +6,23 @@ import { computed, ref } from 'vue'
 import { api } from '../api'
 import type { BgmTrack } from '../api'
 
-const emit = defineEmits<{ changed: [] }>()
+// 带上当前自定义层目录 —— 渲染要用它当 bgm_dir，
+// 否则界面显示的和实际混进片子的不是一批曲子。空串 = 用后端默认。
+const emit = defineEmits<{ changed: [dir: string] }>()
 
 const tracks = ref<BgmTrack[]>([])
 const builtinDir = ref('')
 const customDir = ref('')
 const loading = ref(false)
 const adding = ref(false)
+const picking = ref(false)
 const loaded = ref(false)
 const error = ref('')
 const note = ref('')
+
+// 用户选的自定义层目录。空 = 用后端默认（%LOCALAPPDATA%\Ave\bgm）。
+// 传给每个 bgm 接口 —— 后端三个接口本来就收 custom_dir，之前界面没有入口。
+const pickedDir = ref('')
 
 const builtin = computed(() => tracks.value.filter((t) => t.source === 'builtin'))
 const custom = computed(() => tracks.value.filter((t) => t.source === 'custom'))
@@ -24,7 +31,7 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const r = await api.bgm()
+    const r = await api.bgm(pickedDir.value || undefined)
     tracks.value = r.tracks
     builtinDir.value = r.builtin_dir
     customDir.value = r.custom_dir
@@ -36,12 +43,42 @@ async function load() {
   }
 }
 
+// 换自定义层目录。走后端弹原生目录框 —— 浏览器拿不到真实路径。
+async function pickFolder() {
+  picking.value = true
+  error.value = ''
+  note.value = ''
+  try {
+    const r = await api.pickDir('选择存放 BGM 的文件夹', customDir.value)
+    if (!r.path) {
+      note.value = '未选择文件夹'
+      return
+    }
+    pickedDir.value = r.path
+    await load()
+    // 渲染要用这个目录，通知外层把 bgm_dir 带进请求
+    emit('changed', pickedDir.value)
+  } catch (e) {
+    error.value = String(e instanceof Error ? e.message : e)
+  } finally {
+    picking.value = false
+  }
+}
+
+// 回到默认目录
+async function resetFolder() {
+  pickedDir.value = ''
+  note.value = ''
+  await load()
+  emit('changed', pickedDir.value)
+}
+
 async function add() {
   adding.value = true
   error.value = ''
   note.value = ''
   try {
-    const r = await api.bgmAdd()
+    const r = await api.bgmAdd(pickedDir.value || undefined)
     if (!r.added.length && !r.skipped.length) {
       note.value = '未选择文件'
     } else {
@@ -49,7 +86,7 @@ async function add() {
       if (r.skipped.length)
         note.value += `，跳过 ${r.skipped.map((s) => `${s.name}（${s.why}）`).join('、')}`
       await load()
-      emit('changed')
+      emit('changed', pickedDir.value)
     }
   } catch (e) {
     error.value = String(e instanceof Error ? e.message : e)
@@ -63,9 +100,9 @@ async function remove(t: BgmTrack) {
   error.value = ''
   note.value = ''
   try {
-    await api.bgmDelete(t.name)
+    await api.bgmDelete(t.name, pickedDir.value || undefined)
     await load()
-    emit('changed')
+    emit('changed', pickedDir.value)
   } catch (e) {
     error.value = String(e instanceof Error ? e.message : e)
   }
@@ -83,7 +120,9 @@ async function remove(t: BgmTrack) {
       <button :disabled="loading" @click="load">
         {{ loaded ? '刷新' : '查看' }}
       </button>
-      <button class="primary" :disabled="adding" @click="add">
+      <!-- 不用 primary —— 首屏里它会和「开始渲染」抢注意力，
+           而主流程是「扫描 → 渲染」，加音乐是可选的旁支。 -->
+      <button :disabled="adding" @click="add">
         {{ adding ? '选择中…' : '添加音乐' }}
       </button>
     </div>
@@ -110,10 +149,20 @@ async function remove(t: BgmTrack) {
         <div class="layer-head">
           <b>自定义</b>
           <em>你自己加的，更新应用不会动它</em>
+          <span class="spacer" />
+          <button class="tiny" :disabled="picking" @click="pickFolder">
+            {{ picking ? '选择中…' : '换文件夹' }}
+          </button>
+          <button v-if="pickedDir" class="tiny" @click="resetFolder">
+            用默认
+          </button>
         </div>
-        <p class="path">{{ customDir }}</p>
+        <p class="path">
+          {{ customDir }}
+          <em v-if="pickedDir" class="tag">已指定</em>
+        </p>
         <p v-if="!custom.length" class="muted small">
-          （还没加。点「添加音乐」选本机音频文件）
+          （这个文件夹里没有音频。点「添加音乐」选文件，或「换文件夹」指到已有 BGM 的目录）
         </p>
         <ul v-else>
           <li v-for="t in custom" :key="t.name">
@@ -177,6 +226,19 @@ async function remove(t: BgmTrack) {
   color: var(--dim);
   margin: 6px 0 0;
   word-break: break-all;
+}
+.tiny {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.tag {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 6px;
 }
 ul {
   list-style: none;

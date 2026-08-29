@@ -201,15 +201,23 @@ export const api = {
     ),
 
   // ---- BGM 两层管理 ----
-  bgm: () =>
-    get<{ builtin_dir: string; custom_dir: string; tracks: BgmTrack[] }>('/bgm'),
-  // 弹系统文件框选音频（浏览器拿不到真实路径，必须走后端）
-  bgmAdd: () =>
-    post<{ added: string[]; skipped: { name: string; why: string }[] }>(
-      '/bgm/add',
+  // customDir 传了就把自定义层指向那个目录（界面上「换文件夹」用）
+  bgm: (customDir?: string) =>
+    get<{ builtin_dir: string; custom_dir: string; tracks: BgmTrack[] }>(
+      customDir ? `/bgm?custom_dir=${encodeURIComponent(customDir)}` : '/bgm',
     ),
-  bgmDelete: (name: string) =>
-    post<{ ok: boolean }>(`/bgm/delete?name=${encodeURIComponent(name)}`),
+  // 弹系统文件框选音频（浏览器拿不到真实路径，必须走后端）
+  bgmAdd: (customDir?: string) =>
+    post<{ added: string[]; skipped: { name: string; why: string }[] }>(
+      customDir
+        ? `/bgm/add?custom_dir=${encodeURIComponent(customDir)}`
+        : '/bgm/add',
+    ),
+  bgmDelete: (name: string, customDir?: string) =>
+    post<{ ok: boolean }>(
+      `/bgm/delete?name=${encodeURIComponent(name)}` +
+        (customDir ? `&custom_dir=${encodeURIComponent(customDir)}` : ''),
+    ),
 
   // ---- AI 口播文案 ----
   copyList: (source?: string) => post<CopyList>('/copy/list', { source }),
