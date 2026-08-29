@@ -16,7 +16,7 @@ if not exist "fonts\SourceHanSansSC-Bold.otf" (
   echo        跑 python 准备素材.py 自动下载
   pause & exit /b 1
 )
-if not exist "licensesfmpeg\SOURCE-OFFER.md" (
+if not exist "licenses\ffmpeg\SOURCE-OFFER.md" (
   echo [错误] 缺 licenses\ 许可声明。随包 ffmpeg 是 GPL 构建，
   echo        对外分发必须附许可与源码获取说明，不能少这个目录。
   pause & exit /b 1
@@ -57,6 +57,6 @@ echo ============================================
 echo 分发时整个 dist\Ave 文件夹一起拷走。
 echo 首次运行会下载语音模型约 1.5G 到 %%LOCALAPPDATA%%\Ave
 echo.
-echo 对外分发前请先读 licensesfmpeg\SOURCE-OFFER.md，
+echo 对外分发前请先读 licenses\ffmpeg\SOURCE-OFFER.md，
 echo 把里面的 ^<待填^> 补齐 (源码归档地址)。
 pause
