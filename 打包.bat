@@ -59,6 +59,12 @@ if exist "docs\使用说明.md" (
   echo [警告] 缺 docs\使用说明.md，同事拿到包没有操作手册
 )
 
+rem 测试反馈表一起带上 —— 给测试同事填的，正式分发时可以不放。
+if exist "docs\测试反馈表.md" (
+  copy /y "docs\测试反馈表.md" "dist\Ave\测试反馈表.md" >nul
+  echo         已放入 测试反馈表.md
+)
+
 echo [6/6] 打 zip 压缩包...
 rem Compress-Archive 是 Windows 自带的，不额外装 7-zip。
 rem 压 dist\Ave\* 而不是 dist\Ave 本身 ——
