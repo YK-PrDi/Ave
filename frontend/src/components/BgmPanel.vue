@@ -4,7 +4,7 @@
 // 只有自定义层能增删 —— 内置层删了下次更新还会回来。
 import { computed, ref } from 'vue'
 import { api } from '../api'
-import type { BgmTrack } from '../api'
+import type { BgmCloud, BgmTrack } from '../api'
 
 // 带上当前自定义层目录 —— 渲染要用它当 bgm_dir，
 // 否则界面显示的和实际混进片子的不是一批曲子。空串 = 用后端默认。
@@ -24,6 +24,10 @@ const note = ref('')
 // 传给每个 bgm 接口 —— 后端三个接口本来就收 custom_dir，之前界面没有入口。
 const pickedDir = ref('')
 
+// 云端第三层。null = 后端没返回（旧版本后端也能用，不至于白屏）。
+const cloud = ref<BgmCloud | null>(null)
+const clearing = ref(false)
+
 const builtin = computed(() => tracks.value.filter((t) => t.source === 'builtin'))
 const custom = computed(() => tracks.value.filter((t) => t.source === 'custom'))
 
@@ -35,6 +39,7 @@ async function load() {
     tracks.value = r.tracks
     builtinDir.value = r.builtin_dir
     customDir.value = r.custom_dir
+    cloud.value = r.cloud ?? null
     loaded.value = true
   } catch (e) {
     error.value = String(e instanceof Error ? e.message : e)
@@ -107,6 +112,24 @@ async function remove(t: BgmTrack) {
     error.value = String(e instanceof Error ? e.message : e)
   }
 }
+
+// 清空已下载的云端曲子。清单副本留着 —— 删了它离线就没得随机了。
+async function clearCloudCache() {
+  const n = cloud.value?.cached ?? 0
+  if (!confirm(`清空已下载的 ${n} 首云端曲子？下次渲染会重新下载。`)) return
+  clearing.value = true
+  error.value = ''
+  note.value = ''
+  try {
+    const r = await api.bgmCacheClear()
+    note.value = `已清空 ${r.removed} 首`
+    await load()
+  } catch (e) {
+    error.value = String(e instanceof Error ? e.message : e)
+  } finally {
+    clearing.value = false
+  }
+}
 </script>
 
 <template>
@@ -172,6 +195,30 @@ async function remove(t: BgmTrack) {
             <button class="del" @click="remove(t)">删除</button>
           </li>
         </ul>
+      </div>
+      <div v-if="cloud && cloud.enabled" class="layer">
+        <div class="layer-head">
+          <b>云端曲库</b>
+          <em>抽中哪首下哪首，下过的不再重复下载</em>
+          <span class="spacer" />
+          <button
+            v-if="cloud.cached"
+            class="tiny"
+            :disabled="clearing"
+            @click="clearCloudCache"
+          >
+            {{ clearing ? '清理中…' : '清空缓存' }}
+          </button>
+        </div>
+        <p class="cloud-stat">
+          共 <b>{{ cloud.total }}</b> 首 · 已下载
+          <b>{{ cloud.cached }}</b> 首（{{ cloud.size_mb }}MB）
+          <em v-if="cloud.version" class="tag">{{ cloud.version }}</em>
+        </p>
+        <p v-if="cloud.note" class="warn">{{ cloud.note }}</p>
+        <p v-else class="muted small">
+          渲染前会把这批要用的先下好，不会渲到一半卡住。
+        </p>
       </div>
     </template>
   </section>
@@ -239,6 +286,15 @@ async function remove(t: BgmTrack) {
   border-radius: 3px;
   padding: 0 4px;
   margin-left: 6px;
+}
+.cloud-stat {
+  font-size: 12px;
+  color: var(--dim);
+  margin: 6px 0 0;
+}
+.cloud-stat b {
+  color: var(--fg, #e8eaed);
+  font-weight: 500;
 }
 ul {
   list-style: none;

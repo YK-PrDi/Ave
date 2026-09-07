@@ -38,6 +38,21 @@ const prewarmPercent = computed(() => {
 })
 const prewarmFails = computed(() => prewarmEvs.value.filter((e) => e.error).length)
 
+// 云端 BGM 预取。⚠️ 和 ASR 预热不同，它发生在 start **之后** ——
+// 所以判据不能照抄 `prewarming`（那个靠 `!startEv`），要看「还没开始出片」。
+// 不单独显示的话，下载几十兆期间进度条停在 0/39，又是一次「看着像卡死」。
+const bgmEvs = computed(() =>
+  props.events.filter((e) => e.type === 'bgm_prefetch'),
+)
+const bgmEv = computed(() => bgmEvs.value[bgmEvs.value.length - 1])
+const bgmFetching = computed(() => !!bgmEv.value && !items.value.length)
+const bgmPercent = computed(() => {
+  const e = bgmEv.value
+  if (!e?.total) return 0
+  return Math.round(((e.done ?? 0) / e.total) * 100)
+})
+const bgmFails = computed(() => bgmEvs.value.filter((e) => e.error).length)
+
 const total = computed(() => startEv.value?.total ?? 0)
 const failCount = computed(() => items.value.filter((e) => !e.ok).length)
 const percent = computed(() =>
@@ -103,6 +118,21 @@ const notes = computed(() => {
           <span v-if="prewarmFails" class="bad">失败 {{ prewarmFails }}</span>
           <span class="spacer" />
           <span class="dim ell">{{ prewarm?.file }}</span>
+        </div>
+      </div>
+
+      <div v-if="bgmFetching" class="prewarm">
+        <div class="bar">
+          <div class="fill warm" :style="{ width: bgmPercent + '%' }" />
+        </div>
+        <div class="meta">
+          <span>下载本次要用的背景音乐（下过的不再下）</span>
+          <span class="dim">
+            {{ bgmEv?.done ?? 0 }} / {{ bgmEv?.total ?? 0 }}
+          </span>
+          <span v-if="bgmFails" class="bad">失败 {{ bgmFails }}</span>
+          <span class="spacer" />
+          <span class="dim ell">{{ bgmEv?.file }}</span>
         </div>
       </div>
 

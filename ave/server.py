@@ -38,7 +38,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from ave import config, pipeline, vision
+from ave import bgm_cloud, config, pipeline, vision
 
 app = FastAPI(title="Ave 混剪工具")
 
@@ -166,6 +166,9 @@ def health():
             "custom": sum(1 for _p, t in tracks if t == "custom"),
             "builtin_dir": layers[0][0],
             "custom_dir": config.BGM_DIR,
+            # 云端第三层只报开关状态。**不在这里拉清单** ——
+            # health 每次界面加载都调，拉清单会拖慢启动。明细走 /api/bgm。
+            "cloud": bgm_cloud.enabled(),
         },
         "source_dir": config.SOURCE_DIR,
         "output_dir": config.OUTPUT_DIR,
@@ -419,7 +422,16 @@ def bgm_list(custom_dir: str | None = None):
         "builtin_dir": layers[0][0],
         "custom_dir": _bgm_custom_dir(custom_dir),
         "tracks": tracks,
+        # 云端第三层。**只读清单不下载音频** —— 界面刷一次面板就调一次这里，
+        # 顺手下几百兆显然不行。真正下载在渲染前的预取那一步。
+        "cloud": bgm_cloud.cache_stats(),
     }
+
+
+@app.post("/api/bgm/cache/clear")
+def bgm_cache_clear():
+    """清空已下载的云端曲子。清单副本留着 —— 删了它离线就没得随机了。"""
+    return {"removed": bgm_cloud.clear_cache()}
 
 
 @app.post("/api/bgm/add")

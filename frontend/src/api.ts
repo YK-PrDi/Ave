@@ -18,6 +18,8 @@ export interface Health {
     custom: number
     builtin_dir: string
     custom_dir: string
+    // 云端第三层启用没有。明细（曲目数/已缓存/版本）走 /api/bgm
+    cloud?: boolean
   }
   source_dir: string
   output_dir: string
@@ -28,6 +30,16 @@ export interface Health {
     speed: number
     bgm_volume: number
   }
+}
+
+export interface BgmCloud {
+  enabled: boolean
+  total: number
+  cached: number
+  size_mb: number
+  version: string
+  // 非空表示有情况要告诉用户（云端拉取失败、回落本地清单等）
+  note: string
 }
 
 export interface BgmTrack {
@@ -106,7 +118,16 @@ export interface JobParams {
 export interface JobEvent {
   // prewarm：渲染前的 ASR 预热。全新安装时缓存是空的，这一步要跑两分钟，
   // 没有它界面会静默停在「渲染中」看起来像卡死。
-  type: 'start' | 'prewarm' | 'item' | 'done' | 'stopped' | 'error' | 'eof'
+  // bgm_prefetch：云端 BGM 预取，发生在 start 之后、出片之前。
+  type:
+    | 'start'
+    | 'prewarm'
+    | 'bgm_prefetch'
+    | 'item'
+    | 'done'
+    | 'stopped'
+    | 'error'
+    | 'eof'
   at?: number
   done?: number
   total?: number
@@ -203,9 +224,16 @@ export const api = {
   // ---- BGM 两层管理 ----
   // customDir 传了就把自定义层指向那个目录（界面上「换文件夹」用）
   bgm: (customDir?: string) =>
-    get<{ builtin_dir: string; custom_dir: string; tracks: BgmTrack[] }>(
+    get<{
+      builtin_dir: string
+      custom_dir: string
+      tracks: BgmTrack[]
+      cloud?: BgmCloud
+    }>(
       customDir ? `/bgm?custom_dir=${encodeURIComponent(customDir)}` : '/bgm',
     ),
+  // 清空已下载的云端曲子（清单副本留着，离线仍能随机）
+  bgmCacheClear: () => post<{ removed: number }>('/bgm/cache/clear', {}),
   // 弹系统文件框选音频（浏览器拿不到真实路径，必须走后端）
   bgmAdd: (customDir?: string) =>
     post<{ added: string[]; skipped: { name: string; why: string }[] }>(

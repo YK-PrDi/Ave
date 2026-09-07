@@ -17,7 +17,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import combo  # noqa: E402
-from ave import asr, config, render, subtitle, tts, vision  # noqa: E402
+from ave import asr, bgm_cloud, config, render, subtitle, tts, vision  # noqa: E402
 
 
 def build_theme_map(pools, dedup=True):
@@ -55,13 +55,44 @@ def make_tts_backend():
     return tts.StubBackend(config.FFMPEG)
 
 
-def pick_bgm(rng, bgm_dir=None):
-    """从 BGM 两层（内置 + 自定义）合并的候选池里随机挑一首。
+def bgm_pool(bgm_dir=None, cloud_tracks=None):
+    """合并候选池，返回 [(键, 项), ...]。项是本地路径字符串或云端清单 dict。
 
-    两层都空则返回 None。bgm_dir 传了就覆盖自定义层，语义与旧签名兼容。
+    **排序必须稳定**：`os.listdir()` 的顺序和清单里的顺序都可能变，
+    不排序时同一个 seed 抽到的曲子会漂。按 (层级, 键) 排 —— 层级固定
+    builtin/custom/cloud，键是文件名或云端 id。
     """
-    tracks = [p for p, _tag in config.list_bgm(bgm_dir)]
-    return rng.choice(tracks) if tracks else None
+    items = []
+    for p, tag in config.list_bgm(bgm_dir):
+        items.append(((0 if tag == "builtin" else 1,
+                       os.path.basename(p)), p))
+    for t in (cloud_tracks or []):
+        items.append(((2, str(t.get("id"))), t))
+    items.sort(key=lambda x: x[0])
+    return items
+
+
+def pick_bgm(rng, bgm_dir=None, cloud_tracks=None):
+    """从三层（内置 + 自定义 + 云端）合并的候选池里随机挑一首。
+
+    返回 (本地路径, 云端id或None)。都空则返回 (None, None)。
+    bgm_dir 传了就覆盖自定义层，语义与旧签名兼容。
+
+    云端项是**懒解析**的：抽中了才 `ensure_local()` 下载 —— 这就是
+    「下载量与库大小无关」的地方，300 首的库跑 39 条也只碰 30~36 首。
+    正常流程里 `run()` 已经预取过，这里基本都是缓存命中。
+    """
+    pool = bgm_pool(bgm_dir, cloud_tracks)
+    if not pool:
+        return None, None
+    _key, item = rng.choice(pool)
+    if isinstance(item, str):
+        return item, None
+    # 云端项：解析成本地文件。失败就这条没 BGM，不拖垮整批
+    try:
+        return bgm_cloud.ensure_local(item), item.get("id")
+    except (RuntimeError, OSError):
+        return None, None
 
 
 def scan(source=None):
@@ -106,8 +137,13 @@ def read_manifest(out_dir=None):
     return items if isinstance(items, dict) else {}
 
 
-def record_manifest(out_dir, filename, cb, seed):
-    """追加一条记录。同名重渲直接覆盖，避免换 seed 后留下旧构成。"""
+def record_manifest(out_dir, filename, cb, seed, bgm_id=None):
+    """追加一条记录。同名重渲直接覆盖，避免换 seed 后留下旧构成。
+
+    `bgm_id` 是云端曲库那首的 id。**云端清单会持续增长，所以同一个 seed
+    下次跑抽到的 BGM 可能不同**（池子变了）—— 不假装能复现，而是如实记录
+    实际用了哪首（铁律 4：成品构成只认这份清单）。本地 BGM 记 None。
+    """
     items = read_manifest(out_dir)
     items[filename] = {
         "index": cb.index,
@@ -115,6 +151,7 @@ def record_manifest(out_dir, filename, cb, seed):
         "hook": cb.hook.label,
         "points": [p.label for p in cb.points],
         "ending": cb.ending.label,
+        "bgm_id": bgm_id,
         "at": int(time.time()),
     }
     p = manifest_path(out_dir)
@@ -320,8 +357,9 @@ def point_texts(pools):
 
 def build_one(cb, recognizer, backend, rng, work, encoder,
               out_dir=None, bgm_dir=None, sub_size=None, speed=None,
-              copy_store=None, vision_backend=None, bgm_volume=None):
-    """渲染一条成品。返回 (输出路径, 提示列表)。
+              copy_store=None, vision_backend=None, bgm_volume=None,
+              cloud_tracks=None):
+    """渲染一条成品。返回 (输出路径, 提示列表, 选中的云端 BGM id)。
 
     speed 参数废弃但保留接口兼容 —— 现在配音按固定语速合成，
     画面倍速逐段计算（用户 2026-08-26 定，消除各段快慢不一的问题）。
@@ -455,9 +493,10 @@ def build_one(cb, recognizer, backend, rng, work, encoder,
                                  os.path.join(clip_dir, "voice.mp3"),
                                  config.FFMPEG)
     vol = config.BGM_VOLUME if bgm_volume is None else bgm_volume
-    bgm = pick_bgm(rng, bgm_dir) if vol > 0 else None
+    bgm, bgm_id = ((None, None) if vol <= 0
+                   else pick_bgm(rng, bgm_dir, cloud_tracks))
     if bgm is None and vol > 0:
-        notes.append("无 BGM（两层 bgm 目录都为空，见 docs/资源需求清单.md）")
+        notes.append("无 BGM（三层候选池都为空，见 docs/资源需求清单.md）")
 
     out_dir = out_dir or config.OUTPUT_DIR
     os.makedirs(out_dir, exist_ok=True)
@@ -465,7 +504,7 @@ def build_one(cb, recognizer, backend, rng, work, encoder,
     render.render([c.path for c in cb.clips], voice, subs, out, config.FFMPEG,
                   bgm=bgm, total_dur=timeline, encoder=encoder,
                   clip_speeds=clip_speeds, bgm_volume=vol)
-    return out, notes
+    return out, notes, bgm_id
 
 
 def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
@@ -538,7 +577,43 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
     backend = make_tts_backend()
     rng = random.Random(seed)
 
-    ok, failed, all_notes = 0, [], []
+    # ---- 云端曲库：拉清单 + 渲染前预取 ----
+    # **必须在渲染循环之前下完**：不然渲染跑到一半才去下载，单首几 MB、
+    # 网络慢时要几秒，39 条累积起来进度条会莫名卡住，看着像卡死。
+    cloud_tracks = []
+    vol_on = (config.BGM_VOLUME if bgm_volume is None else bgm_volume) > 0
+    if vol_on and bgm_cloud.enabled():
+        cloud_tracks, cnote = bgm_cloud.fetch_manifest()
+        if cnote:
+            # 不准静默退化（铁律 9）—— 回落了要说出来
+            all_notes_pre = [cnote]
+        else:
+            all_notes_pre = []
+        if cloud_tracks:
+            # 按 seed 空跑一遍，算出这批真会用到哪些云端曲子。
+            # 用**独立的 rng 副本**，不能动主 rng —— 它的调用次数会影响
+            # 后面每条片子的抽样，动了等于换了一批组合。
+            probe_rng = random.Random(seed)
+            wanted, seen_ids = [], set()
+            for _cb in combos:
+                _k, item = probe_rng.choice(
+                    bgm_pool(bgm_dir, cloud_tracks))
+                if isinstance(item, dict) and item.get("id") not in seen_ids:
+                    seen_ids.add(item["id"])
+                    wanted.append(item)
+            need = [e for e in wanted if not bgm_cloud.is_cached(e)]
+            if need:
+                emit(type="bgm_prefetch", done=0, total=len(need), file="")
+                _ok, _fails = bgm_cloud.prefetch(
+                    need, on_event=lambda ev: emit(**ev))
+                if _fails:
+                    all_notes_pre.append(
+                        f"{len(_fails)} 首云端 BGM 下载失败，"
+                        f"那几条会回落成无 BGM：{'；'.join(_fails[:3])}")
+    else:
+        all_notes_pre = []
+
+    ok, failed, all_notes = 0, [], list(all_notes_pre)
     t0 = time.time()
     for cb in combos:
         if should_stop and should_stop():
@@ -546,14 +621,16 @@ def run(source=None, points=None, hook_limit=None, limit=0, seed=None,
             break
         t = time.time()
         try:
-            out, notes = build_one(cb, recognizer, backend, rng,
-                                   config.WORK_DIR, encoder,
-                                   out_dir=out_dir, bgm_dir=bgm_dir,
-                                   sub_size=sub_size, speed=speed,
-                                   copy_store=copy_store,
-                                   vision_backend=vision_backend,
-                                   bgm_volume=bgm_volume)
-            record_manifest(out_dir, os.path.basename(out), cb, seed)
+            out, notes, bgm_id = build_one(cb, recognizer, backend, rng,
+                                           config.WORK_DIR, encoder,
+                                           out_dir=out_dir, bgm_dir=bgm_dir,
+                                           sub_size=sub_size, speed=speed,
+                                           copy_store=copy_store,
+                                           vision_backend=vision_backend,
+                                           bgm_volume=bgm_volume,
+                                           cloud_tracks=cloud_tracks)
+            record_manifest(out_dir, os.path.basename(out), cb, seed,
+                            bgm_id=bgm_id)
             ok += 1
             all_notes.extend(notes)
             emit(type="item", index=cb.index, total=len(combos), ok=True,

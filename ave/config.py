@@ -203,6 +203,30 @@ BGM_DIR = _first_existing(
 # 认作 BGM 的扩展名。原先散在 pipeline 和 server 两处各写一遍，收拢到这里。
 BGM_EXTS = (".mp3", ".wav", ".m4a", ".aac", ".flac")
 
+# ---------------- 云端曲库（第三层） ----------------
+#
+# 曲库要扩到 100~300 首（0.3~0.8GB），随包会把分发 zip 从 192MB 顶到 1GB，
+# 微信都传不了。所以音频放 OSS/COS，本地只存一份清单，抽中哪首才下哪首。
+#
+# **为什么这样可行**：`pick_bgm()` 随机只需要「清单」，音频本体仅在
+# `render()` 那一刻要真实可读。且每条成品只用一首 —— 全量 39 条是 39 次
+# 有放回抽样，期望只碰到 30~36 首（约 90MB），**下载量与库大小无关**。
+#
+# 清单 URL 走凭证而不是写死：它可能带签名/私有 bucket，属于凭证范畴。
+# 空 = 不启用云端，完全回落本地两层（老用户零感知）。
+# ⚠️ **赋值在下面凭证块之后**（`_cred()` 那时才定义好），不是这里 ——
+# 写在这里会 `NameError: _cred is not defined`，import config 直接崩【实测】。
+# 搜 `BGM_CLOUD_MANIFEST =` 找真正的赋值点。
+
+# 下载的曲子落这里。**必须在用户数据目录**（铁律 6）——
+# 放应用目录的话，更新应用会把已下载的几百兆曲库一起冲掉。
+# 与 ASR / copy 缓存同级，同属「算一次反复复用」的东西。
+BGM_CACHE_DIR = os.path.join(_USER_DIR, "bgm-cache")
+
+# 本地清单副本。云端拉不到时用它兜底（离线仍能按上次的库随机，
+# 已缓存的那些照常出片）。
+BGM_MANIFEST_CACHE = os.path.join(BGM_CACHE_DIR, "manifest.json")
+
 # BGM 音量，百分比（相对原始音量）。前端有滑块，这里是默认值。
 # 用百分比而不是 dB 暴露给界面 —— 运营看得懂「3%」，看不懂「-30 分贝」。
 # 0 = 不混 BGM（`render.build_filter` 会走无 BGM 分支）。
@@ -456,6 +480,10 @@ def _vision_backend():
 
 
 VISION_BACKEND = _vision_backend()
+
+# 云端曲库清单 URL。说明见上面「云端曲库（第三层）」那段 ——
+# 赋值放这里是因为 `_cred()` 到这才定义好。空 = 不启用云端。
+BGM_CLOUD_MANIFEST = _cred("BGM_CLOUD_MANIFEST")
 
 # AI 口播文案缓存。和 ASR 缓存同一个目录 —— 都是「按源片段算一次、
 # 反复复用」的东西，且都该跟着用户数据目录走（更新应用不冲掉）。
