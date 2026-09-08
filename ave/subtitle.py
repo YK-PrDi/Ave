@@ -213,3 +213,71 @@ def render_png(text, out_path, font_path, size_scale=12,
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     img.save(out_path)
     return out_path
+
+
+# ---------------- BGM 署名（CC-BY 要求） ----------------
+#
+# **不复用上面的 `render_png()`**：它的 `VERTICAL_POS` / 字号 / `wrap_text()`
+# 都是按中文字幕调的，中文折行规则会把英文授权文本切得很难看。
+#
+# ⚠️ **文本必须由调用方按实际那首曲子给**（清单的 `attribution` 字段），
+# 这里不拼、不写死 —— BGM 每条随机抽，写死一行的话除碰巧对上的那条，
+# 其余全是错误署名，比没署名更糟。见 `docs/BGM授权决策.md` 第七节。
+#
+# ⚠️ **「低透明度」不能低到看不清**。incompetech FAQ 要求
+# 「想知道来源的人应不费力找到」且不得遮蔽 —— 太淡等于没履行义务。
+# 故取小字 + 贴右下不挡主体 + 仍然清晰可读。
+CREDIT_SIZE_PX = 26           # 相对 REF_WIDTH=1080，按画布宽等比缩放
+CREDIT_LINE_RATIO = 1.32
+CREDIT_MARGIN_R = 36
+CREDIT_MARGIN_B = 36
+CREDIT_COLOR = (255, 255, 255, 236)
+CREDIT_SHADOW = (0, 0, 0, 210)
+CREDIT_SHADOW_OFFSET = (2, 2)
+# ⚠️ **必须描边，不能只靠投影**。署名压在画面右下角，那里明暗不定 ——
+# 实测白字 + 2px 投影落在浅色台面上对比度就不够了（`Kevin MacLeod` 那行）。
+# 描边是字幕渲染器已经验证过的办法，对任意背景都稳。
+# 比例比字幕小（字幕 0.06）—— 小字用 0.06 会糊成一团。
+CREDIT_STROKE_RATIO = 0.035
+CREDIT_STROKE_COLOR = (0, 0, 0, 255)
+
+
+def render_credit_png(text, out_path, font_path,
+                      canvas=(CANVAS_W, CANVAS_H)):
+    """把 BGM 署名渲成透明 PNG（整画布尺寸，可直接 overlay 到 0,0）。
+
+    `text` 用换行分行，**不做自动折行** —— 官方模板本身是四行
+    （曲名 / 作者 / 授权 / 链接），拆错行会破坏它的语义完整性。
+    右对齐贴右下角。文本为空返回 None，调用方跳过叠加。
+    """
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return None
+
+    w, h = canvas
+    px = max(10, round(CREDIT_SIZE_PX * w / REF_WIDTH))
+    font = ImageFont.truetype(font_path, px)
+
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    line_h = round(px * CREDIT_LINE_RATIO)
+    mr = round(CREDIT_MARGIN_R * w / REF_WIDTH)
+    mb = round(CREDIT_MARGIN_B * w / REF_WIDTH)
+    top = h - mb - line_h * len(lines)
+
+    stroke = max(1, round(px * CREDIT_STROKE_RATIO))
+
+    for i, line in enumerate(lines):
+        bbox = draw.textbbox((0, 0), line, font=font, stroke_width=stroke)
+        x = w - mr - (bbox[2] - bbox[0]) - bbox[0]      # 右对齐
+        y = top + i * line_h
+        draw.text((x + CREDIT_SHADOW_OFFSET[0], y + CREDIT_SHADOW_OFFSET[1]),
+                  line, font=font, fill=CREDIT_SHADOW,
+                  stroke_width=stroke, stroke_fill=CREDIT_SHADOW)
+        draw.text((x, y), line, font=font, fill=CREDIT_COLOR,
+                  stroke_width=stroke, stroke_fill=CREDIT_STROKE_COLOR)
+
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    img.save(out_path)
+    return out_path

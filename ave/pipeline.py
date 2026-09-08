@@ -72,6 +72,40 @@ def bgm_pool(bgm_dir=None, cloud_tracks=None):
     return items
 
 
+# 署名显示时长（秒）。两秒够看清四行小字，又不占用正片。
+CREDIT_SECONDS = 2.0
+
+
+def credit_text(bgm_id, cloud_tracks=None):
+    """按 bgm_id 从云端清单查这首曲子的署名文本。查不到返回 ""。
+
+    优先用清单里现成的 `attribution`（抓取时照抄官方生成器的输出）。
+    老清单没这个字段就用 title/artist 兜底拼一版 —— **但仍然用真实曲名**，
+    绝不返回一个固定字符串。
+
+    `cloud_tracks` 传了就用（渲染流程里已经拉过，别重复请求）。
+    """
+    tracks = cloud_tracks
+    if tracks is None:
+        tracks, _note = bgm_cloud.fetch_manifest()
+    for t in (tracks or []):
+        if str(t.get("id")) != str(bgm_id):
+            continue
+        if t.get("attribution"):
+            return t["attribution"]
+        title, artist = t.get("title"), t.get("artist")
+        if not title:
+            return ""
+        url = t.get("license_url") or ""
+        lic = t.get("license") or ""
+        return "\n".join(x for x in (f'"{title}"',
+                                     f"{artist} (incompetech.com)"
+                                     if artist else "",
+                                     f"Licensed under {lic}" if lic else "",
+                                     url) if x)
+    return ""
+
+
 def pick_bgm(rng, bgm_dir=None, cloud_tracks=None):
     """从三层（内置 + 自定义 + 云端）合并的候选池里随机挑一首。
 
@@ -497,6 +531,23 @@ def build_one(cb, recognizer, backend, rng, work, encoder,
                    else pick_bgm(rng, bgm_dir, cloud_tracks))
     if bgm is None and vol > 0:
         notes.append("无 BGM（三层候选池都为空，见 docs/资源需求清单.md）")
+
+    # BGM 署名叠最后两秒。**必须按 bgm_id 逐条查**，不准写死一行 ——
+    # BGM 每条随机抽，写死的话除碰巧对上的那条其余全是错误署名
+    # （见 `docs/BGM授权决策.md` 第七节）。
+    # 只有云端 CC-BY 曲子要署名；本地两层是 Pixabay（无需署名），
+    # `bgm_id` 为 None 时直接跳过。
+    if bgm_id:
+        credit = credit_text(bgm_id, cloud_tracks)
+        if credit:
+            png = subtitle.render_credit_png(
+                credit, os.path.join(clip_dir, "credit.png"),
+                config.FONT_PATH)
+            if png:
+                subs.append((png, max(0.0, timeline - CREDIT_SECONDS),
+                             timeline))
+        else:
+            notes.append(f"BGM {bgm_id} 在清单里查不到署名信息，未叠署名")
 
     out_dir = out_dir or config.OUTPUT_DIR
     os.makedirs(out_dir, exist_ok=True)
