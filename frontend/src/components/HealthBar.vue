@@ -12,7 +12,10 @@ function issues(h: Health) {
   if (!h.tts_ready) out.push({ text: '火山引擎凭证不全，配音会失败', level: 'error' })
   if (h.tts_backend === 'stub')
     out.push({ text: '配音为静音占位（等火山引擎凭证）', level: 'warn' })
-  if (h.bgm_count === 0)
+  // ⚠️ `bgm_count` 只数本地两层，**不含云端**。云端启用时本地 0 首是
+  // 正常状态（曲子抽中才下载），这时报「未放入 BGM」是假警告 ——
+  // 实测清掉内置层后必然触发，而云端 312 首好着呢。
+  if (h.bgm_count === 0 && !h.bgm.cloud)
     out.push({ text: '未放入 BGM，成品无背景音乐', level: 'warn' })
   return out
 }
@@ -32,7 +35,11 @@ function issues(h: Health) {
     <span class="spacer" />
     <span class="muted">
       BGM {{ props.health.bgm_count }} 首（内置
-      {{ props.health.bgm.builtin }} · 自定义 {{ props.health.bgm.custom }}）
+      {{ props.health.bgm.builtin }} · 自定义 {{ props.health.bgm.custom }}<template
+        v-if="props.health.bgm.cloud"
+      >
+        · 云端曲库已启用</template
+      >）
     </span>
   </div>
 </template>
